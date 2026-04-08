@@ -1,0 +1,43 @@
+{
+  "name": "defynets",
+  "version": "1.0.0",
+  "description": "Define a schema with HKT type relationships. Get a reactive, type-safe builder.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "typescript",
+    "builder-pattern",
+    "schema",
+    "hkt",
+    "higher-kinded-types",
+    "type-safe",
+    "reactive",
+    "fluent-api",
+    "dsl"
+  ],
+  "author": "slavamirniy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/slavamirniy/defynets.git"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
