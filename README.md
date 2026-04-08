@@ -1,6 +1,6 @@
 # defynets
 
-**Declarative schemas that build themselves. TypeScript does the rest.**
+**Types first. Dependencies second. Implementations last.**
 
 ```bash
 npm i git+https://github.com/slavamirniy/defynets.git
@@ -8,50 +8,304 @@ npm i git+https://github.com/slavamirniy/defynets.git
 
 ---
 
-## What is this?
+## The idea
 
-You describe the **shape** of your config. `defynets` gives you a **builder** that:
+TypeScript is powerful. But in practice, you still write **code first** and then fight the type system to make it safe. Generics get out of hand. Builder classes are boilerplate. Config objects lose type connections.
 
-- Only shows methods you're allowed to call right now
-- Infers every type at every step — zero `as any`, full autocomplete
-- Tells you exactly what's missing if you try to `build()` too early
-- Supports nesting, cross-references, per-key projections, modular composition
+`defynets` flips this. You describe **what your system looks like** — types, shapes, and how they depend on each other. The library gives you a builder that **guides the implementor** through the correct construction, step by step, with full inference at every point.
 
-It's a **type-level dependency graph** that guides the developer through the correct construction order.
+You don't write builders. You don't write generics. You write a **schema** — and TypeScript becomes a declarative configuration system.
 
 ---
 
-## The "Aha" Moment
+## Step 1: A builder appears
 
-### Before: manual builder, 200 lines of boilerplate
+Start simple. You have an interface — you want a builder for it.
 
 ```typescript
-class PipelineBuilder {
-    private tasks?: Record<string, TaskDef>;
-    private handlers?: Record<string, Function>;
+import { MakeBuilder } from "defynets";
 
-    defineTasks(t: Record<string, TaskDef>) { this.tasks = t; return this; }
-    defineHandlers(h: Record<string, Function>) { this.handlers = h; return this; }
-
-    build() {
-        if (!this.tasks) throw new Error("tasks required");
-        if (!this.handlers) throw new Error("handlers required");
-        // no type link between tasks and handlers
-        // handler args are `any`
-        // nothing prevents calling defineHandlers before defineTasks
-        return { tasks: this.tasks, handlers: this.handlers };
-    }
-}
+const server = MakeBuilder<{
+    host: string;
+    port: number;
+    debug: boolean;
+}>()
+    .defineHost("localhost")
+    .definePort(3000)
+    .defineDebug(true)
+    .build();
 ```
 
-Problems: no connection between task types and handler signatures, no ordering, runtime errors, `any` everywhere.
+That's it. No class, no constructor, no manual `build()` validation. Remove `definePort()` — and `build()` disappears from autocomplete. Pass a string to `definePort()` — compile error.
 
-### After: 12 lines of schema, everything inferred
+But this is just the surface. It gets interesting when fields start **talking to each other**.
+
+---
+
+## Step 2: Fields that depend on each other
+
+Real systems aren't flat. A database pool needs a connection string. A session store needs a cache URL. Things have **order**.
 
 ```typescript
 import { schema, ty } from "defynets";
 
+const Config = schema()
+    .field("db", ty.string)
+    .field("cache", ty.string)
+    .field("pool", $ => $.ref("db"))        // pool depends on db
+    .field("session", $ => $.ref("cache"))   // session depends on cache
+    .done();
+```
+
+Now watch what happens when you use it:
+
+```typescript
+Config.                          // autocomplete: defineDb, defineCache
+                                 // pool and session are HIDDEN — deps not met
+
+Config
+    .defineDb("postgres://localhost/app")
+    //                               ↓ definePool appears — db is now defined
+    .definePool("postgres://localhost/app")
+    .defineCache("redis://localhost")
+    //                               ↓ defineSession appears — cache is now defined
+    .defineSession("redis://localhost")
+    .build();
+```
+
+`definePool` doesn't exist on the type until `defineDb` is called. Not hidden behind a flag. Not a runtime check. The **method literally doesn't exist** until its dependency is satisfied.
+
+You declared a relationship between types. The builder enforced it. No generics.
+
+---
+
+## Step 3: The schema IS the architecture
+
+Here's where the paradigm shift happens. Look at this:
+
+```typescript
+const API = schema()
+    .field("endpoints", ty.dict(ty.object({
+        request: ty.desc,
+        response: ty.desc,
+    })))
+    .field("handlers", $ => $.dict($.from("endpoints"), $$ =>
+        $$.fn($$("request"), $$("response")),
+    ))
+    .done();
+```
+
+Read it out loud: *"There are endpoints, each with a request and response type. There are handlers — one per endpoint — each taking the endpoint's request and returning its response."*
+
+That's not code. That's **architecture**. And now watch the builder in action:
+
+```typescript
+const api = API
+    .defineEndpoints({
+        getUser:   { request: ty.object({ id: ty.string }),   response: ty.object({ name: ty.string }) },
+        listUsers: { request: ty.object({ page: ty.number }), response: ty.object({ users: ty.array(ty.string) }) },
+    })
+    .defineHandlers({
+        getUser:   (req) => ({ name: `User ${req.id}` }),
+        //          ^^^ req: { id: string } — inferred from getUser.request
+        listUsers: (req) => ({ users: [`page${req.page}`] }),
+        //          ^^^ req: { page: number } — inferred from listUsers.request
+    })
+    .build();
+```
+
+No generics. No mapped types. No `[K in keyof T]: (req: T[K]["request"]) => T[K]["response"]`. You declared the **relationship** — `handlers` depends on `endpoints`, each handler maps request → response — and TypeScript inferred everything.
+
+**Compare with the traditional approach:**
+
+```typescript
+function createAPI<
+    TEndpoints extends Record<string, { request: unknown; response: unknown }>,
+    THandlers extends { [K in keyof TEndpoints]: (req: TEndpoints[K]["request"]) => TEndpoints[K]["response"] }
+>(endpoints: TEndpoints, handlers: THandlers) { ... }
+```
+
+Two generic parameters for two fields. Add middleware? Three parameters. Add validators? Four. Every field adds a generic to every function that touches the system.
+
+With `defynets`, adding middleware is one line:
+
+```typescript
+    .field("middleware", $ => $.dict($.from("endpoints"), $$ =>
+        $$.fn($$("request"), $$("request")),     // transform request → request
+    ))
+```
+
+No generics changed. No signatures rewritten. The schema grew, and the builder adapted.
+
+---
+
+## Step 4: Types first, implementations second
+
+By now the pattern is clear:
+
+1. **Declare types** — what things look like (`ty.object`, `ty.desc`, `ty.string`)
+2. **Declare relationships** — how things connect (`$.from`, `$.ref`, `$$`)
+3. **Implement** — the builder tells you what to fill in, in what order, with what types
+
+This is **types-first development**. The schema is the single source of truth. Implementations follow.
+
+Here's a task processing pipeline. Read the schema — it reads like a spec:
+
+```typescript
 const Pipeline = schema()
+    // 1. Define task shapes
+    .field("tasks", ty.dict(ty.object({
+        input: ty.desc,
+        output: ty.desc,
+    })))
+    // 2. Workers handle specific tasks
+    .field("workers", $ => $.dict($.object({
+        handles: $.array($.from("tasks")),
+        concurrency: $.type<number>(),
+    })))
+    // 3. Each task gets a typed handler
+    .field("handlers", $ => $.dict($.from("tasks"), $$ =>
+        $$.fn($$("input"), $$("output")),
+    ))
+    // 4. Pipeline references tasks and workers by name
+    .field("pipeline", $ => $.array($.object({
+        task: $.from("tasks"),
+        worker: $.from("workers"),
+    })))
+    .done();
+```
+
+Now implement it. The builder guides you:
+
+```typescript
+const system = Pipeline
+    // Step 1: define tasks — no deps, available immediately
+    .defineTaskTypes({
+        resize: {
+            input: ty.object({ url: ty.string, width: ty.number, height: ty.number }),
+            output: ty.object({ url: ty.string, dimensions: ty.string }),
+        },
+        compress: {
+            input: ty.object({ data: ty.string, level: ty.number }),
+            output: ty.object({ data: ty.string, ratio: ty.number }),
+        },
+    })
+
+    // Step 2: define workers — handles must be "resize" | "compress"
+    .defineWorkers({
+        gpuWorker: { handles: ["resize"], concurrency: 4 },
+        cpuWorker: { handles: ["compress"], concurrency: 8 },
+    })
+
+    // Step 3: handlers — each typed per task
+    .defineHandlers({
+        resize:   (input) => ({ url: `done:${input.url}`, dimensions: `${input.width}x${input.height}` }),
+        //         ^^^^^ { url: string, width: number, height: number }
+        compress: (input) => ({ data: input.data.slice(0, input.level), ratio: 0.7 }),
+        //         ^^^^^ { data: string, level: number }
+    })
+
+    // Step 4: pipeline — task and worker must reference existing keys
+    .definePipeline([
+        { task: "resize",   worker: "gpuWorker" },
+        { task: "compress", worker: "cpuWorker" },
+        // { task: "rotate", worker: "gpuWorker" }  ← TS error: "rotate" doesn't exist
+    ])
+    .build();
+```
+
+The schema is the **spec**. The builder is the **guided implementation**. TypeScript is the **verifier**.
+
+---
+
+## Deep dive: `from()` — where types connect
+
+`$.from()` is the core mechanism. It says *"this field's keys come from that field."* Each source type works differently, and each solves a real problem.
+
+### Keys from object — like `keyof`, but automatic
+
+```typescript
+const Flags = schema()
+    .field("features", ty.object({ darkMode: ty.boolean, analytics: ty.boolean }))
+    .field("descriptions", $ => $.dict($.from("features"), $.string))
+    .done();
+
+Flags
+    .defineFeatures({ darkMode: true, analytics: false })
+    .defineDescriptions({
+        darkMode:  "Toggle dark color scheme",
+        analytics: "Usage tracking",
+        // typo: "..."  ← TS error
+    })
+    .build();
+```
+
+You didn't write `keyof`. You said *"descriptions has the same keys as features"*.
+
+### Keys from array — elements become keys
+
+```typescript
+const Auth = schema()
+    .field("roles", ty.array(ty.string))
+    .field("permissions", $ => $.dict($.from("roles"), $.type<boolean>()))
+    .done();
+
+Auth
+    .defineRoles(["admin", "editor", "viewer"])
+    .definePermissions({
+        admin: true, editor: true, viewer: false,
+        // hacker: true  ← TS error
+    })
+    .build();
+```
+
+Define `["admin", "editor", "viewer"]` — and permissions must have exactly those keys. No `R extends readonly string[]`, no `R[number]`.
+
+### Keys from string — a single value becomes a key
+
+```typescript
+const Tenant = schema()
+    .field("name", ty.string)
+    .field("quota", $ => $.dict($.from("name"), $.number))
+    .done();
+
+Tenant
+    .defineName("acme")
+    .defineQuota({ acme: 42 })   // ← exactly one key: "acme"
+    .build();
+```
+
+### Keys from deep path — reach into nested structures
+
+```typescript
+const Network = schema()
+    .field("services", ty.dict(ty.object({
+        config: ty.object({ label: ty.string, timeout: ty.number }),
+    })))
+    .field("timeouts", $ => $.dict($.from("services", "config", "label"), $.number))
+    .done();
+
+Network
+    .defineServices({
+        api:      { config: { label: "REST",      timeout: 5000 } },
+        realtime: { config: { label: "WebSocket",  timeout: 30000 } },
+    })
+    .defineTimeouts({
+        "REST":      5000,
+        "WebSocket": 30000,
+        // "GraphQL": 1000  ← TS error: not a label value
+    })
+    .build();
+```
+
+`$.from("services", "config", "label")` — three segments, each with **autocomplete**. No recursive conditional types.
+
+### Per-key projection — each value typed by its key
+
+The most powerful form. Instead of a uniform value type, each key gets its own type derived from the source entry:
+
+```typescript
+const System = schema()
     .field("tasks", ty.dict(ty.object({
         input: ty.desc,
         output: ty.desc,
@@ -62,305 +316,113 @@ const Pipeline = schema()
     .done();
 ```
 
-Now:
-- `defineHandlers` only appears **after** `defineTasks`
-- Each handler is typed `(input: ConcreteInput) => ConcreteOutput` per task
-- Keys are constrained — you can't add a handler for a task that doesn't exist
-- `build()` shows `BuildNotReady<"handlers">` until everything is defined
+`$$("input")` inside the callback means *"the input field of the current entry"*. For `resize`, that's `{ url: string, width: number }`. For `compress`, that's `{ data: string }`. Each handler gets **its own signature**.
+
+**Instead of:**
+
+```typescript
+type Handlers<T extends Record<string, { input: unknown; output: unknown }>> = {
+    [K in keyof T]: (input: T[K]["input"]) => T[K]["output"]
+};
+```
+
+**Now:** `$$.fn($$("input"), $$("output"))`. The mapped type is expressed as a **relationship**, not as type gymnastics.
 
 ---
 
-## Key Features
+## Nested schemas — modular type-first systems
 
-### 1. Reactive Method Visibility
-
-Methods appear and disappear based on what you've already defined.
+Schemas can embed other schemas. Types propagate through nesting levels.
 
 ```typescript
-const App = schema()
-    .field("db", ty.string)
-    .field("cache", ty.string)
-    .field("pool", $ => $.ref("db"))      // depends on db
-    .field("session", $ => $.ref("cache")) // depends on cache
-    .done();
-
-App.                      // autocomplete: defineDb, defineCache
-App.defineDb("postgres"). // autocomplete: defineCache, definePool ← pool unlocked
-```
-
-This isn't a runtime check. It's a **compile-time guarantee** — the method literally doesn't exist on the type until its dependencies are satisfied.
-
-**Comparison with Zod / io-ts / Effect Schema:**
-Those validate **data at runtime**. `defynets` validates **construction order at compile time**. They solve different problems — use both together if needed.
-
-### 2. Cross-Field Type Propagation
-
-Define a field once. Reference it everywhere. Types flow automatically.
-
-```typescript
-const API = schema()
-    .field("endpoints", ty.dict(ty.object({
-        request: ty.desc,
-        response: ty.desc,
-    })))
-    .field("handlers", $ => $.dict($.from("endpoints"), $$ =>
-        $$.fn($$("request"), $$("response"))
-    ))
-    .field("mocks", $ => $.dict($.from("endpoints"), $$ =>
-        $$.fn($$("request"), $$("response"))
-    ))
-    .done();
-```
-
-Define endpoints once → handlers AND mocks are both typed per-endpoint. Change an endpoint's request type → both handler and mock signatures update. Zero duplication.
-
-### 3. Five Dict Key Sources
-
-Dictionaries can derive their keys from anything:
-
-```typescript
-schema()
-    // Free keys — any string
-    .field("env", ty.dict(ty.string))
-
-    // From object keys — keyof
-    .field("features", ty.object({ dark: ty.boolean, i18n: ty.boolean }))
-    .field("labels", $ => $.dict($.from("features"), $.string))
-    // → { dark: string, i18n: string }
-
-    // From string array elements
-    .field("roles", ty.array(ty.string))
-    .field("perms", $ => $.dict($.from("roles"), $.boolean))
-    // defineRoles(["admin","viewer"]) → { admin: bool, viewer: bool }
-
-    // From a single string value
-    .field("tenant", ty.string)
-    .field("quota", $ => $.dict($.from("tenant"), $.number))
-    // defineTenant("acme") → { acme: number }
-
-    // From deep path values
-    .field("channels", ty.dict(ty.object({
-        config: ty.object({ label: ty.string }),
-    })))
-    .field("timeouts", $ => $.dict($.from("channels", "config", "label"), $.number))
-    // label values become keys
-```
-
-Every `$.from()` path segment has **autocomplete** — you can't mistype a path.
-
-### 4. Per-Key Projection with `$$`
-
-Inside `dict(source, $$ => ...)`, the `$$` callable gives you access to each entry's fields:
-
-```typescript
-.field("tasks", ty.dict(ty.object({
-    input: ty.desc,
-    output: ty.desc,
-})))
-.field("handlers", $ => $.dict($.from("tasks"), $$ =>
-    $$.fn($$("input"), $$("output"))
-    //    ^^^^^^^^^^^ typed per-task
-))
-```
-
-`$$("input")` auto-unwraps `ty.desc` → resolved concrete type. Each handler gets **its own** input/output signature.
-
-Callable syntax (`$$("field")`) avoids clashing with `$$.fn()`, `$$.object()`, etc.
-
-### 5. Nested Schemas — Modular Config Architecture
-
-This is the killer feature. Embed one schema inside another as a field. Types propagate through nesting levels:
-
-```typescript
-// Module: reusable core (NOT .done() — it's a SchemaDef)
+// A reusable core module (NOT .done() — stays composable)
 const Core = schema()
-    .field("events", ty.dict(ty.object({
-        payload: ty.desc,
-        response: ty.desc,
-    })))
+    .field("events", ty.dict(ty.object({ payload: ty.desc, response: ty.desc })))
     .field("handlers", $ => $.dict($.from("events"), $$ =>
         $$.fn($$("payload"), $$("response")),
     ));
 
-// Application: embeds Core as a field, adds cross-cutting concerns
+// An application that embeds the core + adds its own concerns
 const App = schema()
-    .field("core", Core)                              // ← nested schema
-    .field("loggers", $ => $.dict(
-        $.from("core", "events"),                     // ← deep ref into nested
-        $$ => $$.fn($$("payload"), $$.string),        // ← typed per-event
+    .field("core", Core)                                       // ← nested schema
+    .field("loggers", $ => $.dict($.from("core", "events"),    // ← ref into nested
+        $$ => $$.fn($$("payload"), $$.string),
     ))
     .done();
 ```
 
-At build time, `defineCore(b => ...)` opens an **inner SmartBuilder** with its own dependency tracking:
+Building it:
 
 ```typescript
-App
-    .defineCore(b => b
+const app = App
+    .defineCore(b => b                                          // ← inner SmartBuilder
         .defineEvents({
             order: {
                 payload: ty.object({ userId: ty.string, total: ty.number }),
                 response: ty.object({ orderId: ty.string }),
             },
         })
-        .defineHandlers({
+        .defineHandlers({                                       // ← appears after defineEvents
             order: (ev) => ({ orderId: `ORD-${ev.userId}` }),
-            //      ^^ ev: { userId: string, total: number } — inferred
         })
         .build()
     )
     .defineLoggers({
         order: (ev) => `Order from ${ev.userId}: $${ev.total}`,
-        //      ^^ same ev type — propagated from core.events
+        //      ^^^ payload type propagated from core → events → order
     })
     .build();
 ```
 
-**What makes this special:**
-- Internal deps (handlers → events) stay **inside** the nested builder — they don't leak
-- `$.from("core", "events")` reaches through the nesting with autocomplete at every level
-- Nesting is **recursive** — embed schemas that embed schemas
-- Each level has its own SmartBuilder with independent dep tracking
+The inner `defineCore(b => ...)` is a full SmartBuilder — with its own dependency tracking, its own ordering. Internal dependencies (handlers → events) stay inside. They don't leak to the outer schema.
 
-**Comparison with NestJS modules / Angular DI:**
-Those wire up runtime services. `defynets` wires up **type relationships** at compile time — the schema IS the documentation, the validation, and the type system in one.
-
-### 6. Informative Errors
-
-`build()` is always visible. When fields are missing, it shows exactly what:
-
-```typescript
-const builder = App.defineDb("postgres");
-builder.build
-//      ^^^^^ BuildNotReady<"cache" | "session">
-//             _missing: "cache" | "session"
-```
-
-Hidden `defineX()` methods don't clutter autocomplete. When `definePool` requires `db`, and `db` isn't defined yet — `definePool` simply doesn't exist on the type.
-
-### 7. Inner Builders for Complex Values
-
-Every `defineX()` accepts a plain value or a callback with a specialized builder:
-
-```typescript
-// Object builder → .defineField(v).build()
-.defineConfig(b => b
-    .defineHost("localhost")
-    .definePort(3000)
-    .build()
-)
-
-// Array builder → .add(v).done()
-.definePipeline(b => b
-    .add({ task: "resize", worker: "gpu" })
-    .add({ task: "thumbnail", worker: "cpu" })
-    .done()
-)
-
-// Dict builder → .entry(key, value).done()
-.defineTasks(b => b
-    .entry("resize", { input: ty.object({...}), output: ty.object({...}) })
-    .entry("thumbnail", { input: ty.object({...}), output: ty.object({...}) })
-    .done()
-)
-```
-
-| HKT | Builder | API |
-|-----|---------|-----|
-| `Obj<Shape>` | `ObjStepBuilder` | `.defineX(v).build()` |
-| `Arr<E>` | `ArrStepBuilder` | `.add(v).done()` |
-| `DynRecord<V>` | `DictStepBuilder` | `.entry(k, v).done()` |
-| `Schema<S>` | `SmartBuilder` | `.defineX(v).build()` (with dep tracking) |
+Nesting is recursive. A schema can embed a schema that embeds a schema.
 
 ---
 
-## Full Example: Image Processing Pipeline
+## Error messages
+
+`build()` is always visible. When fields are missing, it tells you what:
 
 ```typescript
-import { schema, ty } from "defynets";
-
-const Pipeline = schema()
-    .field("taskTypes", ty.dict(ty.object({
-        input: ty.desc,
-        output: ty.desc,
-    })))
-    .field("workers", $ => $.dict($.object({
-        handles: $.array($.from("taskTypes")),
-        concurrency: $.type<number>(),
-    })))
-    .field("handlers", $ => $.dict($.from("taskTypes"), $$ =>
-        $$.fn($$("input"), $$("output")),
-    ))
-    .field("pipeline", $ => $.array($.object({
-        task: $.from("taskTypes"),
-        worker: $.from("workers"),
-    })))
-    .done();
-
-const system = Pipeline
-    .defineTaskTypes({
-        resize: {
-            input: ty.object({ url: ty.string, width: ty.number, height: ty.number }),
-            output: ty.object({ url: ty.string, dimensions: ty.string }),
-        },
-        thumbnail: {
-            input: ty.object({ url: ty.string }),
-            output: ty.object({ thumbUrl: ty.string, size: ty.number }),
-        },
-    })
-    .defineWorkers({
-        imageWorker: { handles: ["resize", "thumbnail"], concurrency: 4 },
-    })
-    .defineHandlers({
-        resize: (input) => ({
-            url: `resized:${input.url}`,                    // ← input: { url, width, height }
-            dimensions: `${input.width}x${input.height}`,
-        }),
-        thumbnail: (input) => ({
-            thumbUrl: `thumb:${input.url}`,                  // ← input: { url }
-            size: 128,
-        }),
-    })
-    .definePipeline([
-        { task: "resize", worker: "imageWorker" },
-        { task: "thumbnail", worker: "imageWorker" },
-        // { task: "compress", worker: "imageWorker" }  ← TS error: "compress" doesn't exist
-    ])
-    .build();
+builder.build
+//      ^^^^^ BuildNotReady<"handlers" | "middleware">
+//             _missing: "handlers" | "middleware"
 ```
 
-TypeScript enforces:
-- `handles` must be `("resize" | "thumbnail")[]`
-- Each handler gets **its own** typed signature (resize input !== thumbnail input)
-- `task` / `worker` in pipeline must reference defined keys
-- `build()` is uncallable until all 4 fields are defined
+Methods with unmet deps don't show in autocomplete — no noise, just what you can do right now.
+
+---
+
+## Inner builders
+
+Every `defineX()` accepts a value or a callback:
+
+```typescript
+.defineConfig(b => b.defineHost("localhost").definePort(3000).build())     // ObjStepBuilder
+.defineSteps(b => b.add({ name: "init" }).add({ name: "run" }).done())    // ArrStepBuilder
+.defineTasks(b => b.entry("resize", {...}).entry("compress", {...}).done()) // DictStepBuilder
+.defineCore(b => b.defineEvents({...}).defineHandlers({...}).build())       // SmartBuilder (nested)
+```
 
 ---
 
 ## The `ty` DSL
 
-| Helper | Description | Example |
-|--------|-------------|---------|
-| `ty.string` | String primitive | `.field("name", ty.string)` |
-| `ty.number` | Number primitive | `.field("port", ty.number)` |
-| `ty.boolean` | Boolean primitive | `.field("debug", ty.boolean)` |
-| `ty.type<T>()` | Explicit TS type | `.field("mode", ty.type<"dev" \| "prod">())` |
-| `ty.desc` | Type descriptor (resolved at build time) | `.field("input", ty.desc)` |
-| `ty.object({...})` | Nested object shape | `.field("db", ty.object({ url: ty.string }))` |
-| `ty.array(el)` | Readonly array | `.field("tags", ty.array(ty.string))` |
-| `ty.dict(...)` | Dict (free / constrained / projected) | See dict patterns above |
-| `ty.nullable(inner)` | `T \| null` | `.field("bio", ty.nullable(ty.string))` |
-| `ty.merge(a, b)` | Intersection `A & B` | `.field("full", ty.merge(ty.ref("a"), ty.ref("b")))` |
-| `ty.oneOf(a, b)` | Union `A \| B` | `.field("result", ty.oneOf(ty.string, ty.number))` |
-| `ty.fn(in, out)` | Function type | `.field("transform", ty.fn(ty.string, ty.number))` |
-| `ty.ref("key")` | Reference another field | `.field("copy", ty.ref("name"))` |
-| `ty.from("key", ...path)` | Key source for dicts | `$.dict($.from("tasks"), ...)` |
-
-### Scoped Context `$` and `$$`
-
-Inside `schema().field("x", $ => ...)`, the `$` object only exposes **previously defined** field names. You literally cannot reference a field that hasn't been declared yet.
-
-Inside `$.dict($.from("x"), $$ => ...)`, the `$$` callable exposes **fields of the current entry**. The type changes per-key.
+| Helper | What it does |
+|--------|-------------|
+| `ty.string`, `ty.number`, `ty.boolean` | Primitives |
+| `ty.type<T>()` | Explicit TypeScript type |
+| `ty.desc` | Type descriptor — resolved at build time |
+| `ty.ref("field")` | This field equals that field's value |
+| `ty.from("field", ...path)` | Keys come from that field (with deep path) |
+| `ty.object({ k: ty.* })` | Nested object shape |
+| `ty.array(el)` | Readonly array |
+| `ty.dict(...)` | Dict — free / constrained / per-key projected |
+| `ty.fn(in, out)` | Function type |
+| `ty.nullable(inner)` | `T \| null` |
+| `ty.merge(a, b)` | `A & B` |
+| `ty.oneOf(a, b)` | `A \| B` |
 
 ---
 
@@ -368,50 +430,33 @@ Inside `$.dict($.from("x"), $$ => ...)`, the `$$` callable exposes **fields of t
 
 | Function | What it does |
 |----------|-------------|
-| `schema()` | Start a schema → chain `.field()` → `.done()` |
-| `MakeBuilder<T>()` | Instant builder from any interface (no deps) |
+| `schema()` | Start schema → `.field()` chain → `.done()` |
+| `MakeBuilder<T>()` | Instant builder from any interface |
 | `MakeDepBuilder<S>()` | Builder from raw HKT schema |
-| `defineSchema(desc)` | Builder from flat descriptor object |
+| `defineSchema(desc)` | Builder from flat descriptor |
 
 | Schema method | What it does |
 |---------------|-------------|
-| `.field(name, ty.*)` | Add a typed field |
-| `.field(name, $ => ...)` | Add a field with cross-references |
+| `.field(name, ty.*)` | Declare a typed field |
+| `.field(name, $ => ...)` | Declare a field with cross-references |
 | `.field(name, SchemaDef)` | Embed another schema as a nested field |
-| `.done()` | Finalize → `SmartBuilder` |
+| `.done()` | Finalize → SmartBuilder |
 
 ---
 
 ## Examples
 
-Progressive, from simple to complex — see [`examples/`](./examples):
+Progressive — [`examples/`](./examples):
 
 | # | File | What it shows |
 |---|------|---------------|
-| 1 | [01-hello-world.ts](examples/01-hello-world.ts) | `MakeBuilder`, schema with `ty` DSL |
-| 2 | [02-dependencies.ts](examples/02-dependencies.ts) | Cross-field deps, `ref`, `from`, `merge` |
-| 3 | [03-dict-patterns.ts](examples/03-dict-patterns.ts) | All five dict key source patterns |
-| 4 | [04-projections.ts](examples/04-projections.ts) | Per-key projections, `$$()`, inner builders |
-| 5 | [05-full-pipeline.ts](examples/05-full-pipeline.ts) | Complete multi-level system |
-| 6 | [06-meta-framework.ts](examples/06-meta-framework.ts) | Nested schemas, modular composition, 2-level nesting |
+| 1 | [01-hello-world.ts](examples/01-hello-world.ts) | Builders from interfaces and schemas |
+| 2 | [02-dependencies.ts](examples/02-dependencies.ts) | Fields that depend on each other |
+| 3 | [03-dict-patterns.ts](examples/03-dict-patterns.ts) | Five ways to derive dict keys |
+| 4 | [04-projections.ts](examples/04-projections.ts) | Per-key projections with `$$()` |
+| 5 | [05-full-pipeline.ts](examples/05-full-pipeline.ts) | Complete multi-level pipeline |
+| 6 | [06-meta-framework.ts](examples/06-meta-framework.ts) | Nested schemas, modular composition |
 
 ---
-
-## When to Use This
-
-**Good fit:**
-- Config-first architectures (pipelines, frameworks, plugin systems)
-- Schemas where fields depend on each other's types
-- Builder APIs where construction order matters
-- Modular systems that need type-safe composition across modules
-
-**Not a fit:**
-- Runtime data validation (use Zod / io-ts)
-- ORM / database schemas (use Prisma / Drizzle)
-- Simple configs with no cross-references (just use an interface)
-
----
-
-## License
 
 MIT
