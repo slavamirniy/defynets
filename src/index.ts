@@ -315,6 +315,36 @@ interface EntryProp<Field extends string> extends HKT {
 }
 
 /**
+ * Type-level join: look up `entry[KeyField]` in `ctx[Source]` and resolve the type.
+ *
+ * Use inside `$$` callbacks when entry fields are **keys into another dict**
+ * (a type catalog). Automatically unwraps `TypeTag<H>` → `Apply<H, ctx>`.
+ *
+ * @typeParam Source - Name of the dict field to look up in (e.g., `"types"`).
+ * @typeParam KeyField - Name of the entry field whose value is used as the key (e.g., `"input"`).
+ *
+ * @example
+ * schema()
+ *   .field("types", ty.dict(ty.desc))
+ *   .field("methods", $ => $.dict($.object({ input: $.from("types"), output: $.from("types") })))
+ *   .field("handlers", $ => $.dict($.from("methods"), $$ =>
+ *     $$.fn($$.lookup("types", "input"), $$.lookup("types", "output"))
+ *   ))
+ */
+interface Lookup<Source extends string, KeyField extends string> extends HKT {
+    readonly _deps: Source;
+    readonly _output: this["_ctx"] extends { readonly __entry: infer E }
+        ? E extends Record<KeyField, infer Key extends string>
+            ? this["_ctx"] extends Record<Source, infer Dict extends Record<string, any>>
+                ? Key extends keyof Dict
+                    ? Dict[Key] extends TypeTag<infer H extends HKT> ? Apply<H, this["_ctx"]> : Dict[Key]
+                    : never
+                : never
+            : never
+        : never;
+}
+
+/**
  * Unwraps a `TypeTag<H>` to its resolved type.
  * @internal
  */
@@ -907,9 +937,25 @@ function defineSchema<S extends Record<string, TypeTag<any>>>(
  *   //    ^^^^^^^^^^^ callable — access entry's "input" field
  * ))
  */
-type EntryScopedTy<Fields extends string> = {
+type EntryScopedTy<Fields extends string, Keys extends string = string> = {
     /** Access a field of the current dict entry. Auto-unwraps `TypeTag`. */
     <F extends Fields>(field: F): TypeTag<EntryProp<F>>;
+
+    /**
+     * Type-level join: resolve `entry[field]` as a key in another dict.
+     *
+     * Use when entry fields are **keys into a type catalog**.
+     * Looks up `ctx[source][entry[field]]` and unwraps `TypeTag` → concrete type.
+     *
+     * @param source - Name of the outer dict field (the type catalog).
+     * @param field - Name of the entry field whose value is the lookup key.
+     *
+     * @example
+     * $$.lookup("types", "input")
+     * // entry.input = "user" → ctx.types["user"] → { userName: string }
+     */
+    lookup: <Src extends Keys, F extends Fields>(source: Src, field: F) => TypeTag<Lookup<Src, F>>;
+
     /** Function type: `(input: In) => Out`. */
     fn: <In extends HKT, Out extends HKT>(input: TypeTag<In>, output: TypeTag<Out>) => TypeTag<Fn<In, Out>>;
     /** Explicit TypeScript type. */
@@ -1007,7 +1053,7 @@ interface ScopedTy<Keys extends string, S extends Record<string, HKT> = Record<s
     dict: {
         <V extends HKT>(valueShape: TypeTag<V>): TypeTag<DynRecord<V>>;
         <K extends Keys, Pa extends string[], V extends HKT>(source: KeySource<K, Pa>, valueShape: TypeTag<V>): TypeTag<DictFrom<K, V, Pa>>;
-        <K extends Keys, Pa extends string[], P extends HKT>(source: KeySource<K, Pa>, proj: ($$: EntryScopedTy<EntryFields<S, K, Pa>>) => TypeTag<P>): TypeTag<DictMap<K, P, Pa>>;
+        <K extends Keys, Pa extends string[], P extends HKT>(source: KeySource<K, Pa>, proj: ($$: EntryScopedTy<EntryFields<S, K, Pa>, Keys>) => TypeTag<P>): TypeTag<DictMap<K, P, Pa>>;
     };
 
     /** Intersection: `A & B`. */
@@ -1215,6 +1261,7 @@ export {
     type DictFrom,
     type Fn,
     type EntryProp,
+    type Lookup,
     type Desc,
     type DictMap,
     // Nested schema composition
