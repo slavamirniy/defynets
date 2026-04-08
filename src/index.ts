@@ -1114,13 +1114,6 @@ class SchemaDef<S extends Record<string, HKT> = {}> {
         return createProxy() as any;
     }
 
-    /**
-     * Get the schema as a `TypeTag<Obj<S>>` for embedding in other schemas.
-     * @deprecated Prefer passing `SchemaDef` directly to `.field()` for nested schemas.
-     */
-    shape(): TypeTag<Obj<S>> {
-        return null! as TypeTag<Obj<S>>;
-    }
 }
 
 /**
