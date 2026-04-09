@@ -37,7 +37,7 @@ const myTree = TreeSchema
     ])
     .build();
 
-const treeBuilder = TreeSchema
+const myTreeMadeWithBuilder = TreeSchema
 .defineNodeId('root')
 .defineChildren(c => c
     .add(c => c
@@ -144,26 +144,6 @@ console.log("Graph nodes:", Object.keys(myGraph.nodes));
 // ============================================================
 //  3. Dynamic Form Builder with Conditional Types
 // ============================================================
-//
-// A form where the values object strictly matches the types
-// defined in the fields schema.
-
-const FormBuilder = schema()
-    // 1. Define the available field types
-    .field("fields", ty.record(ty.oneOf(
-        ty.type<"string">(),
-        ty.oneOf(ty.type<"number">(), ty.type<"boolean">())
-    )))
-    // 2. The values must match the exact shape of the fields!
-    // We map over the fields, and for each field, we check its type string
-    // and map it to the actual TypeScript type.
-    .field("values", $ => $.map($.ref("fields"), fieldType => 
-        // This is a type-level mapping. Since we don't have a direct conditional 
-        // type evaluation at runtime in the builder, we can use `ty.desc` or `ty.type<any>` 
-        // in a real scenario, but here we show how to enforce it via `$.access` if we had a type map.
-        fieldType // In a real advanced scenario, we'd use a type catalog to map "string" -> ty.string
-    ))
-    .done();
 
 // Let's implement the Type Map pattern for the Form!
 const TypedFormBuilder = schema()
