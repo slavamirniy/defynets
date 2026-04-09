@@ -1,299 +1,470 @@
-# SKILL: defynets — Schema-Driven Builder System
+# defynets — AI Skill Guide
 
-## What is defynets?
+## What is defynets
 
-`defynets` is a TypeScript library that generates **dependency-aware, fully-typed builders** from declarative schemas. It uses Higher-Kinded Types (HKT) at the type level to track field dependencies, enforce definition order, and provide IDE autocomplete at every step.
+`defynets` is a TypeScript DSL that replaces complex generic types with declarative, composable schema definitions. You write `$.map`, `$.ref`, `$.access` instead of `[K in keyof T]: T[K] extends ...`. The library generates type-safe builders with dependency-aware method chaining.
 
-**Core idea:** You declare a schema describing fields and their relationships. The library gives you a builder where `defineX()` methods appear only when `X`'s dependencies are satisfied, and `build()` appears only when all fields are defined.
+## When to use
 
-## When to Use
-
-Use `defynets` when generating code that needs:
-- A fluent builder pattern with compile-time safety
-- Fields that reference or depend on each other
-- Dictionaries with keys derived from other fields
-- Per-key typed projections (e.g., handlers typed per endpoint)
-- Meta-schemas where users define types at build time
+- User wants to define type-safe builders or configurations with inter-field dependencies
+- User needs mapped types, constrained record keys, conditional type lookups — expressible declaratively
+- User wants to create FSM, pipeline, worker queue, form builder, or similar typed systems
+- User wants to replace unreadable TypeScript generics with a readable DSL
 
 ## Installation
 
 ```bash
-npm i git:slavamirniy/defynets
+npm i git+https://github.com/slavamirniy/defynets.git
 ```
 
-## Core API
-
-### Imports
+## Core Imports
 
 ```typescript
-import { schema, ty, MakeBuilder, MakeDepBuilder } from "defynets";
+import { schema, ty } from "defynets";
 ```
 
-### Simple Builder (no dependencies)
+- `schema()` — start building a schema definition
+- `ty` — type DSL for field types (used outside callbacks and inside `ty.object`)
+- `$` — scoped type DSL with cross-references (auto-provided in `.field("name", $ => ...)` callbacks)
+
+---
+
+## Schema Definition Pattern
 
 ```typescript
-const result = MakeBuilder<{ name: string; age: number }>()
-  .defineName("Alice")
-  .defineAge(30)
-  .build();
-// { name: "Alice", age: 30 }
+const MySchema = schema()
+    .field("fieldA", ty.string)                        // static type
+    .field("fieldB", $ => $.ref("fieldA"))             // references fieldA
+    .field("fieldC", $ => $.map($.ref("fieldA"), ...)) // maps over fieldA
+    .field("fieldD", NestedSchemaDef)                  // nested schema (no .done())
+    .done();                                            // → SmartBuilder
 ```
 
-### Schema Builder (with dependencies)
+## Builder Usage Pattern
 
 ```typescript
-const App = schema()
-  .field("name", ty.string)
-  .field("greeting", $ => $.ref("name"))  // depends on "name"
-  .done();  // → SmartBuilder
-
-const result = App
-  .defineName("world")      // defineGreeting not yet visible
-  .defineGreeting("hello")  // now visible (name is defined)
-  .build();
-```
-
-## The `ty` DSL — Type Definitions
-
-| Method | Type | Notes |
-|--------|------|-------|
-| `ty.string` | `string` | |
-| `ty.number` | `number` | |
-| `ty.boolean` | `boolean` | |
-| `ty.type<T>()` | `T` | Explicit TS type |
-| `ty.desc` | `TypeTag<any>` | Type descriptor slot for meta-schemas |
-| `ty.ref("key")` | Value of `key` | Creates dependency on `key` |
-| `ty.from("key", ...path)` | Key source | For dict keys and value references |
-| `ty.object({ k: ty.X })` | `{ k: X }` | Nested object |
-| `ty.array(ty.X)` | `readonly X[]` | Array |
-| `ty.nullable(ty.X)` | `X \| null` | Nullable |
-| `ty.dict(...)` | `Record<K, V>` | Dictionary (see patterns below) |
-| `ty.merge(A, B)` | `A & B` | Intersection |
-| `ty.oneOf(A, B)` | `A \| B` | Union |
-| `ty.fn(In, Out)` | `(input: In) => Out` | Function type |
-
-## Scoped Context (`$`)
-
-Inside `schema().field("name", $ => ...)`, the `$` parameter is a `ScopedTy` — same methods as `ty` but with autocomplete constrained to previously defined fields:
-
-```typescript
-schema()
-  .field("game", ty.string)
-  .field("data", $ => $.ref("game"))
-  //                      ^^^^ autocomplete: only "game"
-```
-
-## Dict Patterns
-
-### 1. Free keys
-
-```typescript
-.field("config", ty.dict(ty.string))
-// defineConfig({ anyKey: "value" })
-```
-
-### 2. Keys from object (`keyof`)
-
-```typescript
-.field("defaults", ty.object({ theme: ty.string, lang: ty.string }))
-.field("overrides", $ => $.dict($.from("defaults"), $.nullable($.string)))
-// defineOverrides({ theme: "dark", lang: null })
-//                   ^^^^^ only "theme" | "lang" allowed
-```
-
-### 3. Keys from string array
-
-```typescript
-.field("roles", ty.array(ty.string))
-.field("permissions", $ => $.dict($.from("roles"), $.type<boolean>()))
-// defineRoles(["admin", "editor"])
-// definePermissions({ admin: true, editor: false })
-```
-
-### 4. Keys from string value
-
-```typescript
-.field("tenant", ty.string)
-.field("data", $ => $.dict($.from("tenant"), $.number))
-// defineTenant("acme") → defineData({ acme: 42 })
-```
-
-### 5. Keys from deep path
-
-```typescript
-.field("tasks", ty.dict(ty.object({
-    name: ty.string,
-    input: ty.desc,
-    output: ty.desc,
-})))
-.field("handlers", $ => $.dict($.from("tasks", "name"), $$ =>
-    $$.fn($$("input"), $$("output")),
-))
-```
-
-Each path segment in `$.from("tasks", "name")` has autocomplete based on the source field's structure.
-
-## Per-Key Projection (`$$`)
-
-Inside `dict(from, $$ => ...)`, `$$` is an `EntryScopedTy`:
-
-- `$$("field")` — access entry field (callable, auto-unwraps TypeTag)
-- `$$.fn(in, out)` — function type
-- `$$.object(...)`, `$$.string`, etc. — standard type combinators
-
-```typescript
-.field("handlers", $ => $.dict($.from("endpoints"), $$ =>
-    $$.fn($$("request"), $$("response"))
-))
-```
-
-When using deep paths, `$$` gives access to the **parent object** of the key field.
-
-## Inner Builders
-
-Every `defineX()` accepts a callback with an inner builder:
-
-```typescript
-// Dict → .entry(key, value).done()
-.defineTasks(b => b
-    .entry("resize", d => d
-        .defineInput(ty.object({ url: ty.string }))
-        .defineOutput(ty.object({ url: ty.string }))
-        .build())
-    .done())
-
-// Array → .add(value).done()
-.definePipeline(b => b
-    .add({ task: "resize", worker: "main" })
-    .done())
-```
-
-## `ty.desc` — Meta-Schema Pattern
-
-Use `ty.desc` when the builder consumer should provide type definitions:
-
-```typescript
-const TaskSystem = schema()
-    .field("tasks", ty.dict(ty.object({
-        input: ty.desc,    // consumer provides ty.object({...})
-        output: ty.desc,
-    })))
-    .field("handlers", $ => $.dict($.from("tasks"), $$ =>
-        $$.fn($$("input"), $$("output"))
-    ))
-    .done();
-
-// Consumer:
-TaskSystem
-    .defineTasks({
-        resize: {
-            input: ty.object({ url: ty.string, width: ty.number }),
-            output: ty.object({ url: ty.string }),
-        },
-    })
-    .defineHandlers({
-        resize: (input) => ({ url: `done:${input.url}` }),
-        //       ^^^^^ typed: { url: string; width: number }
-    })
+const result = MySchema
+    .defineFieldA("value")
+    .defineFieldB(...)
     .build();
 ```
 
-## Error Types
+- `defineX()` appears only when field X's dependencies are satisfied
+- `build()` available when all fields are defined
+- Hover over `build` to see `BuildNotReady<"missing">` with missing field names
 
-### `BuildNotReady<Missing>`
-
-When `build()` is accessed before all fields are defined, TypeScript shows `BuildNotReady` with a `_missing` property listing remaining fields:
-
-```
-builder.build
-//      ^^^^^ type: BuildNotReady<"workers" | "handlers">
-//             _missing: "workers" | "handlers"
-```
-
-### Hidden `defineX()` methods
-
-Fields whose dependencies aren't met are hidden from autocomplete. They automatically appear once you define the required fields.
-
-## Multi-Level Dependencies
-
-SmartBuilder supports arbitrary dependency depth. Fields at each "level" unlock the next:
+## Inner Builder Pattern (callback syntax)
 
 ```typescript
-const System = schema()
-    .field("taskTypes", ty.dict(ty.object({ input: ty.desc, output: ty.desc })))
-    .field("workers", $ => $.dict($.object({ handles: $.array($.from("taskTypes")) })))
-    .field("pipeline", $ => $.array($.object({ task: $.from("taskTypes"), worker: $.from("workers") })))
-    .field("handlers", $ => $.dict($.from("taskTypes"), $$ => $$.fn($$("input"), $$("output"))))
-    .done();
-
-// Level 1: defineTaskTypes()
-// Level 2: defineWorkers(), defineHandlers() (need taskTypes)
-// Level 3: definePipeline() (needs taskTypes + workers)
+.defineField(b => b.defineX(v).build())          // object fields
+.defineField(b => b.add(v).add(v).done())        // array fields
+.defineField(b => b.entry("k", v).done())        // dict fields
+.defineField(b => b.defineX(v).build())           // nested schema
+.defineField((b, ctx) => ...)                     // ctx = already defined fields
 ```
 
-## Advanced Types (for direct HKT usage)
+---
 
-When using `MakeDepBuilder<Schema>()` directly:
+## ty.* API (outside callbacks)
 
-| Type | Description |
-|------|-------------|
-| `Const<T>` | Always `T`, no deps |
-| `Pluck<K>` | `ctx[K]`, depends on K |
-| `Merge<A, B>` | `A & B` |
-| `DictFrom<K, V, Path>` | Dict with keys from `ctx[K]` |
-| `DictMap<K, Proj, Path>` | Per-key projection over `ctx[K]` |
-| `Fn<In, Out>` | `(input: In) => Out` |
-| `Obj<Shape>` | Nested object |
-| `Arr<E>` | Array |
-| `Nullable<F>` | `F \| null` |
-| `OneOf<A, B>` | `A \| B` |
-| `DynRecord<V>` | Free-key dict |
+| Method | Type | Example |
+|--------|------|---------|
+| `ty.string` | `string` | `.field("name", ty.string)` |
+| `ty.number` | `number` | `.field("port", ty.number)` |
+| `ty.boolean` | `boolean` | `.field("debug", ty.boolean)` |
+| `ty.desc` | type descriptor | `.field("input", ty.desc)` — consumer passes `ty.object(...)` or `ty.type<T>()` at build time |
+| `ty.type<T>()` | explicit `T` | `ty.type<"admin" \| "user">()` |
+| `ty.self()` | object self-ref | Inside `ty.object({...})` — recursive reference to the object being defined |
+| `ty.object(shape)` | `{ ... }` | `ty.object({ host: ty.string, port: ty.number })` |
+| `ty.array(el)` | `readonly T[]` | `ty.array(ty.string)` |
+| `ty.record(val)` | `Record<string, V>` | `ty.record(ty.string)` — free-key dict |
+| `ty.fn(in, out)` | `(in) => out` | `ty.fn(ty.type<Request>(), ty.type<Response>())` |
+| `ty.nullable(inner)` | `T \| null` | `ty.nullable(ty.string)` |
+| `ty.merge(a, b)` | `A & B` | `ty.merge(ty.type<{x: 1}>(), ty.type<{y: 2}>())` |
+| `ty.oneOf(a, b)` | `A \| B` | `ty.oneOf(ty.string, ty.number)` |
+| `ty.promise(inner)` | `Promise<T>` | `ty.promise(ty.string)` |
 
-## Common Patterns for LLM Code Generation
+## $.* API (inside field callbacks)
 
-### Pattern: Config with environment-specific overrides
+Inside `.field("name", $ => ...)`:
+
+**All `ty.*` methods available** (`$.string`, `$.number`, `$.boolean`, `$.desc`, `$.type<T>()`, `$.object(...)`, `$.array(...)`, `$.fn(...)`, `$.nullable(...)`, `$.merge(...)`, `$.oneOf(...)`, `$.promise(...)`), plus:
+
+| Method | Purpose | Example |
+|--------|---------|---------|
+| `$.ref("field")` | Reference a previously defined field. Returns RefTag supporting deep chaining | `$.ref("core").events.payload` |
+| `$.self()` | Schema-level self-reference (full schema output) | `$.array($.self())` — recursive schema |
+| `$.map(source, e => expr)` | Per-key projection. Source is RefTag. Entry `e` exposes fields of each dict/array element | `$.map($.ref("tasks"), e => $.fn(e.input, e.output))` |
+| `$.keysOf(tag)` | Extract keys from type: string → itself, array → elements, object → `keyof` | `$.keysOf($.ref("roles"))` |
+| `$.valuesOf(tag)` | Extract values from type | `$.valuesOf($.ref("config"))` |
+| `$.access(tag, keyTag)` | Type-level lookup: `tag[key]`. Auto-unwraps TypeTag to concrete type | `$.access($.ref("types"), method.input)` |
+| `$.record(val)` | Free-key dictionary | `$.record($.string)` |
+| `$.record(keys, val)` | Constrained-key dictionary | `$.record($.keysOf($.ref("roles")), $.string)` |
+
+### Deep path via RefTag chaining
+
+`$.ref("field")` returns a RefTag that supports property access for deep paths:
+
+```typescript
+$.ref("core").events          // → events field of nested schema "core"
+$.ref("tasks").name           // → name field of array elements in "tasks"
+$.ref("config").db.host       // → deep path into nested object
+```
+
+### Entry access in $.map callback
+
+Inside `$.map(source, entry => ...)`, `entry` supports property chaining to access fields of the current dict/array element:
+
+```typescript
+$.map($.ref("endpoints"), e =>
+    $.fn(e.request, e.response)  // e.request = request field of current entry
+)
+```
+
+---
+
+## Patterns — Simple to Complex
+
+### 1. Basic schema (no dependencies)
 
 ```typescript
 const Config = schema()
-    .field("defaults", ty.object({ port: ty.number, host: ty.string }))
-    .field("overrides", $ => $.dict($.from("defaults"), $.nullable($.string)))
+    .field("host", ty.string)
+    .field("port", ty.number)
+    .field("debug", ty.boolean)
     .done();
+
+const config = Config
+    .defineHost("localhost")
+    .definePort(3000)
+    .defineDebug(true)
+    .build();
 ```
 
-### Pattern: RBAC system
+### 2. Constrained dict keys from object ($.ref + $.keysOf + $.record)
+
+```typescript
+const System = schema()
+    .field("features", ty.object({ darkMode: ty.boolean, i18n: ty.boolean }))
+    .field("labels", $ => $.record($.keysOf($.ref("features")), $.string))
+    .done();
+
+// labels keys: "darkMode" | "i18n" — constrained to features keys
+System.defineFeatures({ darkMode: true, i18n: false })
+    .defineLabels({ darkMode: "Dark Mode", i18n: "Internationalization" })
+    .build();
+```
+
+### 3. Constrained dict keys from array elements
 
 ```typescript
 const RBAC = schema()
     .field("roles", ty.array(ty.string))
-    .field("permissions", $ => $.dict($.from("roles"), $.type<{ read: boolean; write: boolean }>()))
+    .field("perms", $ => $.record($.keysOf($.ref("roles")), $.type<boolean>()))
     .done();
+
+// No `as const` needed. perms keys inferred from actual values.
+RBAC.defineRoles(["admin", "editor", "viewer"])
+    .definePerms({ admin: true, editor: true, viewer: false })
+    .build();
 ```
 
-### Pattern: API with typed handlers
+### 4. Constrained dict keys from string value
+
+```typescript
+const NS = schema()
+    .field("tenant", ty.string)
+    .field("quota", $ => $.record($.keysOf($.ref("tenant")), $.number))
+    .done();
+
+// quota has exactly one key: the tenant string value
+NS.defineTenant("acme").defineQuota({ acme: 42 }).build();
+```
+
+### 5. Per-key projection with $.map (replaces mapped types)
 
 ```typescript
 const API = schema()
-    .field("endpoints", ty.dict(ty.object({ request: ty.desc, response: ty.desc })))
-    .field("handlers", $ => $.dict($.from("endpoints"), $$ => $$.fn($$("request"), $$("response"))))
+    .field("endpoints", ty.record(ty.object({
+        request: ty.desc,
+        response: ty.desc,
+    })))
+    .field("handlers", $ => $.map($.ref("endpoints"), e =>
+        $.fn(e.request, e.response),
+    ))
     .done();
+
+API.defineEndpoints({
+        getUser:   { request: ty.type<{ id: string }>(), response: ty.type<{ name: string }>() },
+        listUsers: { request: ty.type<{ page: number }>(), response: ty.type<{ users: string[] }>() },
+    })
+    .defineHandlers({
+        getUser:   (req) => ({ name: `User ${req.id}` }),         // req: { id: string }
+        listUsers: (req) => ({ users: [`page${req.page}`] }),     // req: { page: number }
+    })
+    .build();
 ```
 
-### Pattern: Pipeline orchestration
+### 6. Map over array with deep path
 
 ```typescript
 const Pipeline = schema()
-    .field("tasks", ty.dict(ty.object({ input: ty.desc, output: ty.desc })))
-    .field("workers", $ => $.dict($.object({ handles: $.array($.from("tasks")) })))
-    .field("pipeline", $ => $.array($.object({ task: $.from("tasks"), worker: $.from("workers") })))
+    .field("tasks", ty.array(ty.object({
+        name: ty.string,
+        input: ty.desc,
+        output: ty.desc,
+    })))
+    .field("processors", $ => $.map($.ref("tasks").name, e =>
+        $.fn(e.input, e.output),
+    ))
     .done();
+
+// $.ref("tasks").name → keys from the name field of each array element
+Pipeline.defineTasks([
+        { name: "resize", input: ty.type<{ url: string }>(), output: ty.type<{ url: string }>() },
+        { name: "compress", input: ty.type<{ data: string }>(), output: ty.type<{ result: string }>() },
+    ])
+    .defineProcessors({
+        resize:   (input) => ({ url: `done:${input.url}` }),
+        compress: (input) => ({ result: input.data.slice(0, 10) }),
+    })
+    .build();
 ```
+
+### 7. Type catalog with $.access (type-level join)
+
+```typescript
+const API = schema()
+    .field("types", ty.record(ty.desc))
+    .field("methods", $ => $.record($.object({
+        input:  $.keysOf($.ref("types")),
+        output: $.keysOf($.ref("types")),
+    })))
+    .field("handlers", $ => $.map($.ref("methods"), method =>
+        $.fn(
+            $.access($.ref("types"), method.input),
+            $.access($.ref("types"), method.output),
+        ),
+    ))
+    .done();
+
+// $.access($.ref("types"), method.input) resolves type name → concrete type
+API.defineTypes({
+        user:    ty.object({ id: ty.number, name: ty.string }),
+        balance: ty.object({ userId: ty.number, amount: ty.number }),
+    })
+    .defineMethods({
+        getUser:    { input: "user",    output: "user" },
+        getBalance: { input: "user",    output: "balance" },
+    })
+    .defineHandlers({
+        getUser:    (u) => ({ id: u.id, name: u.name.toUpperCase() }),   // u: { id: number, name: string }
+        getBalance: (u) => ({ userId: u.id, amount: 100 }),              // returns { userId: number, amount: number }
+    })
+    .build();
+```
+
+### 8. Nested schema composition
+
+```typescript
+const Core = schema()
+    .field("events", ty.record(ty.object({ payload: ty.desc, response: ty.desc })))
+    .field("handlers", $ => $.map($.ref("events"), e => $.fn(e.payload, e.response)));
+
+const App = schema()
+    .field("core", Core)  // embed as nested schema (no .done())
+    .field("loggers", $ => $.map($.ref("core").events, e =>
+        $.fn(e.payload, ty.string),
+    ))
+    .done();
+
+// defineCore opens an inner SmartBuilder
+App.defineCore(b => b
+        .defineEvents({
+            order: {
+                payload: ty.object({ userId: ty.string, total: ty.number }),
+                response: ty.object({ orderId: ty.string }),
+            },
+        })
+        .defineHandlers({
+            order: (ev) => ({ orderId: `ORD-${ev.userId}` }),
+        })
+        .build()
+    )
+    .defineLoggers({
+        order: (ev) => `Order from ${ev.userId}: $${ev.total}`,
+    })
+    .build();
+```
+
+### 9. Schema-level recursion with $.self()
+
+```typescript
+const Tree = schema()
+    .field("id", ty.string)
+    .field("children", $ => $.array($.self()))
+    .done();
+
+// children: Array<{ id: string, children: ... }> — recursive
+Tree.defineNodeId("root")
+    .defineChildren([
+        { nodeId: "child-1", children: [] },
+        { nodeId: "child-2", children: [{ nodeId: "gc", children: [] }] },
+    ])
+    .build();
+
+// Or with inner builder:
+Tree.defineNodeId("root")
+    .defineChildren(b => b
+        .add(b => b.defineNodeId("child-1").defineChildren([]).build())
+        .done()
+    )
+    .build();
+```
+
+### 10. Object-level recursion with ty.self()
+
+```typescript
+const UI = schema()
+    .field("root", ty.object({
+        type: ty.string,
+        props: ty.record(ty.string),
+        children: ty.array(ty.self()),  // ty.self() = this object, not the schema
+    }))
+    .done();
+
+UI.defineRoot({
+        type: "Container",
+        props: { direction: "column" },
+        children: [{
+            type: "Text",
+            props: { content: "Hello" },
+            children: [],
+        }],
+    })
+    .build();
+```
+
+### 11. Merge / intersection
+
+```typescript
+const NS = schema()
+    .field("tenant", ty.string)
+    .field("config", $ => $.merge(
+        $.type<{ version: number }>(),
+        $.record($.keysOf($.ref("tenant")), $.string),
+    ))
+    .done();
+
+// config = { version: number } & { [tenant]: string }
+NS.defineTenant("acme")
+    .defineConfig({ version: 1, acme: "enterprise" })
+    .build();
+```
+
+### 12. FSM pattern
+
+```typescript
+const Machine = schema()
+    .field("states", ty.record(ty.object({
+        on: ty.record(ty.string),
+        data: ty.desc,
+    })))
+    .field("logic", $ => $.map($.ref("states"), state => $.object({
+        send: $.fn($.keysOf(state.on), ty.type<void>()),
+        render: $.fn(state.data, ty.string),
+    })))
+    .done();
+
+Machine.defineStates({
+        red:    { on: { TIMER: "green" },  data: ty.object({ carsWaiting: ty.number }) },
+        green:  { on: { TIMER: "yellow" }, data: ty.object({ carsPassed: ty.number }) },
+        yellow: { on: { TIMER: "red" },    data: ty.type<null>() },
+    })
+    .defineLogic({
+        red:    { send: (e) => {}, render: (d) => `${d.carsWaiting} waiting` },
+        green:  { send: (e) => {}, render: (d) => `${d.carsPassed} passed` },
+        yellow: { send: (e) => {}, render: () => `slow down` },
+    })
+    .build();
+```
+
+### 13. Pipeline pattern
+
+```typescript
+const Pipeline = schema()
+    .field("registry", ty.record(ty.desc))
+    .field("steps", $ => $.array(ty.object({
+        from: $.keysOf($.ref("registry")),
+        to:   $.keysOf($.ref("registry")),
+    })))
+    .field("handlers", $ => $.map($.ref("steps"), step =>
+        $.fn($.access($.ref("registry"), step.from), $.access($.ref("registry"), step.to)),
+    ))
+    .done();
+
+Pipeline.defineRegistry({ rawText: ty.string, tokens: ty.array(ty.string), count: ty.number })
+    .defineSteps([{ from: "rawText", to: "tokens" }, { from: "tokens", to: "count" }])
+    .defineHandlers([(text) => text.split(" "), (tokens) => tokens.length])
+    .build();
+```
+
+### 14. Worker queue with async handlers
+
+```typescript
+const Contracts = schema()
+    .field("tasks", ty.record(ty.object({ input: ty.desc, output: ty.desc })));
+
+const Worker = schema()
+    .field("contracts", Contracts)
+    .field("executors", $ => $.map($.ref("contracts").tasks, task =>
+        $.fn(task.input, $.promise(task.output)),
+    ));
+
+Worker.done()
+    .defineContracts({
+        tasks: {
+            fetchUser: {
+                input: ty.object({ id: ty.number }),
+                output: ty.object({ name: ty.string }),
+            },
+        },
+    })
+    .defineExecutors({
+        fetchUser: async (input) => ({ name: `User ${input.id}` }),
+    })
+    .build();
+```
+
+### 15. Dynamic form builder
+
+```typescript
+const TypedForm = schema()
+    .field("typeMap", ty.record(ty.desc))
+    .field("fields", $ => $.record($.keysOf($.ref("typeMap"))))
+    .field("values", $ => $.map($.ref("fields"), field =>
+        $.access($.ref("typeMap"), field),
+    ))
+    .done();
+
+TypedForm.defineTypeMap({ string: ty.string, number: ty.number, boolean: ty.boolean })
+    .defineFields({ username: "string", age: "number", active: "boolean" })
+    .defineValues({ username: "alice", age: 28, active: true })
+    .build();
+```
+
+---
 
 ## Key Rules
 
-1. **Field order in schema()** determines `$` autocomplete scope — each field only sees previously declared fields.
-2. **Definition order in the builder** is enforced by dependencies — independent fields can be defined in any order.
-3. **`ty.desc`** creates a "slot" where the builder consumer provides a type definition using `ty.object(...)` etc.
-4. **`$.from()`** auto-detects key source: string → single key, string[] → elements, object → keyof, nested → deep path.
-5. **`$$("field")`** inside dict projections uses callable syntax to avoid confusion with methods like `$$.fn()`.
-6. **Inner builders** (callback syntax) mirror the HKT structure: Obj → `.defineX().build()`, Arr → `.add().done()`, DynRecord → `.entry().done()`.
-7. **`build()`** shows `BuildNotReady<Missing>` with `_missing` field listing remaining fields when not all fields are defined.
+1. Use `schema().field(...).done()` to create schemas. `.done()` finalizes into SmartBuilder.
+2. For nested schema embedding, pass the SchemaDef **without** `.done()`: `.field("core", CoreSchemaDef)`.
+3. Use `ty.desc` when consumers provide type descriptors at build time (e.g., `ty.object({...})` or `ty.type<T>()`).
+4. `$.ref("field")` creates a dependency — `defineField()` must be called before dependent fields become available.
+5. `$.keysOf()` extracts keys from any type: string value → itself, `string[]` → elements, `Record<K,V>` → `keyof`.
+6. `$.map(source, entry => ...)` iterates dict/array per key; `entry.field` accesses each element's fields.
+7. `$.access(tag, keyTag)` resolves a type from a dictionary by key — the type-level equivalent of `dict[key]`.
+8. `$.self()` for schema recursion (whole schema output). `ty.self()` for object recursion (current `ty.object` shape).
+9. Inner builders: `(b, ctx) => ...` — second parameter `ctx` contains all previously defined fields.
+10. RefTag chaining: `$.ref("nested").deep.path` for deep references into nested structures.
+11. `MakeBuilder<T>()` is available for simple interface-to-builder conversion (no dependencies, no schema needed).
