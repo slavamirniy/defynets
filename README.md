@@ -5,6 +5,8 @@
 Instead of `[K in keyof T]: T[K] extends ...` — write `$.map`, `$.ref`, `$.access`.
 Same type safety. Zero generic parameters. Reads like a spec.
 
+**[▶ Try it in the Playground](https://playcode.io/typescript-playground--019d743c-5bb6-77cf-a769-e130cdfd66dc)**
+
 ```bash
 npm i git+https://github.com/slavamirniy/defynets.git
 ```
