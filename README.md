@@ -50,6 +50,52 @@ That's **architecture as code**. The builder enforces dependency order, provides
 
 ---
 
+## The builder computes the dependency tree
+
+Every `$.ref()` declares a dependency. The builder analyzes the graph and **progressively reveals** `defineX()` methods — you only see what you can define right now.
+
+```typescript
+const App = schema()
+    //        field             depends on
+    .field("roles",       ty.array(ty.string))                                          // —
+    .field("theme",       ty.string)                                                    // —
+    .field("permissions", $ => $.record($.keysOf($.ref("roles")), $.type<boolean>()))    // roles
+    .field("welcome",     $ => $.ref("theme"))                                          // theme
+    .field("summary",     $ => $.fn($.ref("permissions"), $.string))                    // permissions
+    .done();
+```
+
+Now watch the builder guide you through the dependency levels:
+
+```typescript
+const app = App
+    // ┌ Available: defineRoles, defineTheme
+    // │ Hidden:    definePermissions (needs roles)
+    // │            defineWelcome (needs theme)
+    // │            defineSummary (needs permissions)
+    .defineRoles(["admin", "editor"])
+
+    // ┌ Available: defineTheme, definePermissions  ← unlocked!
+    // │ Hidden:    defineWelcome (needs theme)
+    // │            defineSummary (needs permissions)
+    .defineTheme("dark")
+
+    // ┌ Available: definePermissions, defineWelcome  ← unlocked!
+    // │ Hidden:    defineSummary (needs permissions)
+    .definePermissions({ admin: true, editor: false })
+
+    // ┌ Available: defineWelcome, defineSummary  ← unlocked!
+    .defineWelcome("dark")
+    .defineSummary((perms) => `${JSON.stringify(perms)}`)
+
+    // All fields defined → build() returns the result
+    .build();
+```
+
+No manual ordering. No runtime errors. The **type system itself** enforces the correct construction sequence. Try calling `.definePermissions` before `.defineRoles` — it simply doesn't exist in autocomplete.
+
+---
+
 ## Real systems in a few lines
 
 ### Finite State Machine
@@ -93,6 +139,20 @@ const light = Machine
             render: () => `Yellow: slow down`,
         },
     })
+    .build();
+```
+
+Or build step by step with inner builders — dict fields use `.entry(key, value).done()`:
+
+```typescript
+const light = Machine
+    .defineStates(b => b
+        .entry("red",    { on: { TIMER: "green" },  data: ty.object({ carsWaiting: ty.number }) })
+        .entry("green",  { on: { TIMER: "yellow" }, data: ty.object({ carsPassed: ty.number }) })
+        .entry("yellow", { on: { TIMER: "red" },    data: ty.type<null>() })
+        .done()
+    )
+    .defineLogic({...})
     .build();
 ```
 
@@ -192,6 +252,28 @@ const config = Config
 ```
 
 Remove `.definePort()` — `build()` disappears from autocomplete. Pass a string to `.definePort()` — compile error. No class, no runtime checks.
+
+Every `defineX()` also accepts a **callback with an inner builder** — for objects, arrays, and dicts:
+
+```typescript
+const config = Config
+    .defineHost("localhost")
+    .definePort(3000)
+    .defineDatabase(b => b          // ObjStepBuilder — field by field
+        .defineUrl("postgres://localhost/dev")
+        .definePool(5)
+        .build()
+    )
+    .defineTags(b => b              // ArrStepBuilder — element by element
+        .add("auth")
+        .add("logging")
+        .done()
+    )
+    .defineDebug(true)
+    .build();
+```
+
+Objects get `b.defineX(v).build()`. Arrays get `b.add(v).done()`. Dicts get `b.entry(key, v).done()`. This is especially powerful for recursive structures and nested schemas.
 
 ---
 
@@ -467,7 +549,11 @@ const Tree = schema()
     .field("nodeId", ty.string)
     .field("children", $ => $.array($.self()))
     .done();
+```
 
+Children have the same type as the full schema output — `{ nodeId: string, children: ... }[]`. Pass a literal:
+
+```typescript
 const tree = Tree
     .defineNodeId("root")
     .defineChildren([
@@ -479,17 +565,32 @@ const tree = Tree
     .build();
 ```
 
-Children have the same type as the full schema output — `{ nodeId: string, children: ... }[]`. Inner builder works too:
+Or use inner builders — **each `.add()` callback receives a full SmartBuilder for the schema**, so you can build the tree programmatically:
 
 ```typescript
-Tree.defineNodeId("root")
+const tree = Tree
+    .defineNodeId("root")
     .defineChildren(b => b
-        .add(b => b.defineNodeId("child-1").defineChildren([]).build())
-        .add(b => b.defineNodeId("child-2").defineChildren([]).build())
+        .add(b => b
+            .defineNodeId("chapter-1")
+            .defineChildren(b => b
+                .add(b => b.defineNodeId("section-1.1").defineChildren([]).build())
+                .add(b => b.defineNodeId("section-1.2").defineChildren([]).build())
+                .done()
+            )
+            .build()
+        )
+        .add(b => b
+            .defineNodeId("chapter-2")
+            .defineChildren([])
+            .build()
+        )
         .done()
     )
     .build();
 ```
+
+The pattern: `ArrStepBuilder.add()` → callback → `SmartBuilder` → recursive `.defineChildren()` → `ArrStepBuilder.add()` → ... all the way down, fully typed.
 
 **`ty.self()` — object-level**: references the current `ty.object()` shape, not the full schema.
 
@@ -497,15 +598,19 @@ Tree.defineNodeId("root")
 const UI = schema()
     .field("root", ty.object({
         type: ty.string,
-        props: ty.record(ty.string),
+        props: ty.record(ty.oneOf(ty.string, ty.number)),
         children: ty.array(ty.self()),
     }))
     .done();
+```
 
+Pass a literal:
+
+```typescript
 const ui = UI
     .defineRoot({
         type: "Container",
-        props: { direction: "column" },
+        props: { direction: "column", padding: 16 },
         children: [{
             type: "Text",
             props: { content: "Hello" },
@@ -515,7 +620,42 @@ const ui = UI
     .build();
 ```
 
-`ty.self()` inside the object refers to *that specific object shape*, not the entire schema.
+Or build with inner builders — **ObjStepBuilder + ArrStepBuilder + DictStepBuilder**, all recursive:
+
+```typescript
+const ui = UI
+    .defineRoot(b => b
+        .defineType("Container")
+        .defineProps(b => b.entry("direction", "column").entry("padding", 16).done())
+        .defineChildren(b => b
+            .add(b => b
+                .defineType("Text")
+                .defineProps(b => b.entry("content", "Hello").done())
+                .defineChildren([])
+                .build()
+            )
+            .add(b => b
+                .defineType("Button")
+                .defineProps(b => b.entry("label", "Click").done())
+                .defineChildren(b => b
+                    .add(b => b
+                        .defineType("Icon")
+                        .defineProps(b => b.entry("name", "arrow").done())
+                        .defineChildren([])
+                        .build()
+                    )
+                    .done()
+                )
+                .build()
+            )
+            .done()
+        )
+        .build()
+    )
+    .build();
+```
+
+`ty.self()` inside the object refers to *that specific object shape*, not the entire schema. Inner builders work at every level: `.defineProps()` uses DictStepBuilder (`.entry().done()`), `.defineChildren()` uses ArrStepBuilder (`.add().done()`), each child uses ObjStepBuilder (`.defineX().build()`).
 
 ---
 
@@ -650,6 +790,7 @@ Progressive — [`examples/`](./examples):
 | 7 | [07-type-catalog.ts](examples/07-type-catalog.ts) | Type catalog with `$.access` |
 | 8 | [08-fsm-pipeline-worker.ts](examples/08-fsm-pipeline-worker.ts) | FSM, pipeline, worker queue |
 | 9 | [09-recursion-and-advanced.ts](examples/09-recursion-and-advanced.ts) | `$.self()`, `ty.self()`, graphs, dynamic form builder |
+| 10 | [10-playground.ts](examples/10-playground.ts) | RPC + recursive workflows + component system — all features combined |
 
 ---
 

@@ -53,15 +53,84 @@ const result = MySchema
 - `build()` available when all fields are defined
 - Hover over `build` to see `BuildNotReady<"missing">` with missing field names
 
-## Inner Builder Pattern (callback syntax)
+## Automatic Dependency Tree
+
+The builder analyzes `$.ref()` calls and computes the dependency graph. Methods are revealed progressively:
 
 ```typescript
-.defineField(b => b.defineX(v).build())          // object fields
-.defineField(b => b.add(v).add(v).done())        // array fields
-.defineField(b => b.entry("k", v).done())        // dict fields
-.defineField(b => b.defineX(v).build())           // nested schema
-.defineField((b, ctx) => ...)                     // ctx = already defined fields
+const App = schema()
+    .field("types",    ty.record(ty.desc))                                           // Level 0 (no deps)
+    .field("methods",  $ => $.record($.object({                                      // Level 1 (← types)
+        input: $.keysOf($.ref("types")),
+        output: $.keysOf($.ref("types")),
+    })))
+    .field("handlers", $ => $.map($.ref("methods"), m =>                             // Level 2 (← methods ← types)
+        $.fn($.access($.ref("types"), m.input), $.access($.ref("types"), m.output)),
+    ))
+    .done();
+
+App
+    // Available: defineTypes.  Hidden: defineMethods, defineHandlers.
+    .defineTypes({ user: ty.object({ id: ty.number }), post: ty.string })
+    // Available: defineMethods ← unlocked!  Hidden: defineHandlers.
+    .defineMethods({ getUser: { input: "user", output: "user" } })
+    // Available: defineHandlers ← unlocked!
+    .defineHandlers({ getUser: (u) => ({ id: u.id }) })
+    .build();
 ```
+
+Try calling `.defineHandlers` before `.defineTypes` — it doesn't exist in autocomplete. The type system enforces the construction order.
+
+## Inner Builder Pattern (callback syntax)
+
+Every `defineX()` accepts a **value** or a **callback** `(b, ctx) => ...`. The builder type depends on the field type:
+
+| Field type | Builder | API | Finalize |
+|------------|---------|-----|----------|
+| `ty.object({...})` | ObjStepBuilder | `b.defineX(v)` per field | `.build()` |
+| `ty.array(...)` | ArrStepBuilder | `b.add(v)` per element | `.done()` |
+| `ty.record(...)` / `$.record(...)` | DictStepBuilder | `b.entry("key", v)` per entry | `.done()` |
+| Nested `SchemaDef` | SmartBuilder | `b.defineX(v)` per field | `.build()` |
+
+```typescript
+// Object — field by field
+.defineDatabase(b => b
+    .defineUrl("postgres://localhost/dev")
+    .definePool(5)
+    .build()
+)
+
+// Array — element by element
+.defineTags(b => b
+    .add("auth")
+    .add("logging")
+    .done()
+)
+
+// Dict — entry by entry
+.defineTasks(b => b
+    .entry("resize", { input: ty.type<Img>(), output: ty.type<Img>() })
+    .entry("compress", { ... })
+    .done()
+)
+
+// Nested schema — inner SmartBuilder
+.defineCore(b => b
+    .defineEvents({...})
+    .defineHandlers({...})
+    .build()
+)
+```
+
+The second argument `ctx` gives access to already defined fields:
+```typescript
+.defineOrchestrator((b, ctx) => b
+    .defineContracts(ctx.worker.contracts)
+    .build()
+)
+```
+
+Inner builders are recursive — inside `.add()`, `.entry()`, `.defineX()` callbacks, you get another builder that also supports callbacks. This is the key to building recursive structures like trees.
 
 ---
 
@@ -131,13 +200,23 @@ $.map($.ref("endpoints"), e =>
 const Config = schema()
     .field("host", ty.string)
     .field("port", ty.number)
-    .field("debug", ty.boolean)
+    .field("database", ty.object({ url: ty.string, pool: ty.number }))
+    .field("tags", ty.array(ty.string))
+    .field("env", ty.record(ty.string))
     .done();
 
-const config = Config
-    .defineHost("localhost")
-    .definePort(3000)
-    .defineDebug(true)
+// Direct values:
+Config.defineHost("localhost").definePort(3000)
+    .defineDatabase({ url: "postgres://...", pool: 5 })
+    .defineTags(["auth", "logging"])
+    .defineEnv({ NODE_ENV: "dev" })
+    .build();
+
+// Or with inner builders for objects, arrays, dicts:
+Config.defineHost("localhost").definePort(3000)
+    .defineDatabase(b => b.defineUrl("postgres://...").definePool(5).build())  // ObjStepBuilder
+    .defineTags(b => b.add("auth").add("logging").done())                      // ArrStepBuilder
+    .defineEnv(b => b.entry("NODE_ENV", "dev").entry("PORT", "3000").done())   // DictStepBuilder
     .build();
 ```
 
@@ -301,22 +380,35 @@ App.defineCore(b => b
 
 ```typescript
 const Tree = schema()
-    .field("id", ty.string)
+    .field("nodeId", ty.string)
     .field("children", $ => $.array($.self()))
     .done();
+```
 
-// children: Array<{ id: string, children: ... }> — recursive
+Pass a literal:
+```typescript
 Tree.defineNodeId("root")
     .defineChildren([
         { nodeId: "child-1", children: [] },
         { nodeId: "child-2", children: [{ nodeId: "gc", children: [] }] },
     ])
     .build();
+```
 
-// Or with inner builder:
+Or build recursively with inner builders — **ArrStepBuilder → SmartBuilder → ArrStepBuilder → ...**:
+```typescript
 Tree.defineNodeId("root")
-    .defineChildren(b => b
-        .add(b => b.defineNodeId("child-1").defineChildren([]).build())
+    .defineChildren(b => b                              // ArrStepBuilder
+        .add(b => b                                     // SmartBuilder (recursive!)
+            .defineNodeId("chapter-1")
+            .defineChildren(b => b                      // ArrStepBuilder again
+                .add(b => b.defineNodeId("1.1").defineChildren([]).build())
+                .add(b => b.defineNodeId("1.2").defineChildren([]).build())
+                .done()
+            )
+            .build()
+        )
+        .add(b => b.defineNodeId("chapter-2").defineChildren([]).build())
         .done()
     )
     .build();
@@ -328,20 +420,38 @@ Tree.defineNodeId("root")
 const UI = schema()
     .field("root", ty.object({
         type: ty.string,
-        props: ty.record(ty.string),
+        props: ty.record(ty.oneOf(ty.string, ty.number)),
         children: ty.array(ty.self()),  // ty.self() = this object, not the schema
     }))
     .done();
+```
 
+Pass a literal:
+```typescript
 UI.defineRoot({
         type: "Container",
-        props: { direction: "column" },
-        children: [{
-            type: "Text",
-            props: { content: "Hello" },
-            children: [],
-        }],
+        props: { direction: "column", padding: 16 },
+        children: [{ type: "Text", props: { content: "Hello" }, children: [] }],
     })
+    .build();
+```
+
+Or build with inner builders — **ObjStepBuilder + DictStepBuilder + ArrStepBuilder**, all recursive:
+```typescript
+UI.defineRoot(b => b
+        .defineType("Container")
+        .defineProps(b => b.entry("direction", "column").entry("padding", 16).done())
+        .defineChildren(b => b
+            .add(b => b
+                .defineType("Text")
+                .defineProps(b => b.entry("content", "Hello").done())
+                .defineChildren([])
+                .build()
+            )
+            .done()
+        )
+        .build()
+    )
     .build();
 ```
 
