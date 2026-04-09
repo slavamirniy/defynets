@@ -30,31 +30,28 @@ const ImagePipeline = schema()
 
     // ── Level 2: Infrastructure ─────────────────────────────
     // Workers: each handles a subset of task types
-    .field("workers", $ => $.record($.object({
-        handles: $.array($.keysOf($.ref("taskTypes"))),
-        concurrency: $.type<number>(),
+    .field("workers", $ => ty.record(ty.object({
+        handles: ty.array(ty.keysOf($.ref("taskTypes"))),
+        concurrency: ty.type<number>(),
     })))
 
     // Storages: each can store outputs of certain task types
-    .field("storages", $ => $.record($.object({
-        stores: $.array($.keysOf($.ref("taskTypes"))),
-        backend: $.type<"s3" | "local" | "redis">(),
+    .field("storages", $ => ty.record(ty.object({
+        stores: ty.array(ty.keysOf($.ref("taskTypes"))),
+        backend: ty.type<"s3" | "local" | "redis">(),
     })))
 
     // Handlers: per-task-type typed function (input → output)
-    .field("handlers", $ => $.map($.ref("taskTypes"), task =>
-        $.fn(
-            $.access(task, ty.type<"input">()), 
-            $.access(task, ty.type<"output">())
-        )
+    .field("handlers", $ => ty.map($.ref("taskTypes"), task =>
+        ty.fn(task.input, task.output)
     ))
 
     // ── Level 3: Pipeline ───────────────────────────────────
     // Orchestration: each step references a task, worker, storage
-    .field("pipeline", $ => $.array($.object({
-        task: $.keysOf($.ref("taskTypes")),
-        worker: $.keysOf($.ref("workers")),
-        storage: $.keysOf($.ref("storages")),
+    .field("pipeline", $ => ty.array(ty.object({
+        task: ty.keysOf($.ref("taskTypes")),
+        worker: ty.keysOf($.ref("workers")),
+        storage: ty.keysOf($.ref("storages")),
     })))
 
     .done();

@@ -889,7 +889,24 @@ interface TyDSL {
      * // Free keys:
      * ty.record(ty.string)   // Record<string, string>
      */
-    record: <V extends HKT>(valueShape: TypeTag<V>) => TypeTag<DynRecord<V>>;
+    record: {
+        <V extends HKT>(valueShape: TypeTag<V>): TypeTag<DynRecord<V>>;
+        <K extends HKT, V extends HKT>(keys: TypeTag<K>, valueShape: TypeTag<V>): TypeTag<RecordFromKeys<K, V>>;
+    };
+
+    /**
+     * Map over a dictionary or array source.
+     */
+    map: <K extends string, Pa extends string[], P extends HKT, S extends Record<string, HKT>>(
+        source: RefTag<K, S, Pa>,
+        proj: (entry: EntryRefTag<S, K, Pa, []>) => TypeTag<P>
+    ) => TypeTag<DictMap<K, P, Pa>>;
+
+    keysOf: <T extends HKT>(tag: TypeTag<T>) => TypeTag<KeysOfTag<T>>;
+
+    valuesOf: <T extends HKT>(tag: TypeTag<T>) => TypeTag<ValuesOfTag<T>>;
+
+    access: <T extends HKT, K extends HKT>(tag: TypeTag<T>, key: TypeTag<K>) => TypeTag<AccessTag<T, K>>;
 
     /**
      * Function type: `(input: In) => Out`.
@@ -963,6 +980,10 @@ const ty: TyDSL = {
     type: <T>() => tag<Const<T>>(),
     ref: <K extends string>(key: K) => tag<Pluck<K>>(),
     record: tag as any,
+    map: tag as any,
+    keysOf: tag as any,
+    valuesOf: tag as any,
+    access: tag as any,
     fn: <In extends HKT, Out extends HKT>(input: TypeTag<In>, output: TypeTag<Out>) =>
         tag<Fn<In, Out>>(),
     merge: <A extends HKT, B extends HKT>(a: TypeTag<A>, b: TypeTag<B>) =>
@@ -1072,72 +1093,14 @@ type EntryScopedTy<Fields extends string, Keys extends string = string> = {
  * @typeParam S - Full schema for deep path resolution in dict callbacks.
  */
 interface ScopedTy<Keys extends string, S extends Record<string, HKT> = Record<string, HKT>> {
-    /** String type. */
-    string: TypeTag<Const<string>>;
-    /** Number type. */
-    number: TypeTag<Const<number>>;
-    /** Boolean type. */
-    boolean: TypeTag<Const<boolean>>;
-    /** Type descriptor slot. */
-    desc: TypeTag<Const<TypeTag<any>>>;
     /** Schema-level self reference. */
     self: () => RefTag<"self", S, []>;
-    /** Explicit TypeScript type. */
-    type: <T>() => TypeTag<Const<T>>;
 
     /**
      * Reference another field's value. Autocomplete shows only previously defined fields.
      * @param key - Field name to reference (constrained to `Keys`).
      */
     ref: <K extends Keys>(key: K) => RefTag<K, S, []>;
-
-    /**
-     * Map over a dictionary or array source.
-     */
-    map: <K extends Keys, Pa extends string[], P extends HKT>(
-        source: RefTag<K, S, Pa>,
-        proj: (entry: EntryRefTag<S, K, Pa, []>) => TypeTag<P>
-    ) => TypeTag<DictMap<K, P, Pa>>;
-
-    keysOf: <T extends HKT>(tag: TypeTag<T>) => TypeTag<KeysOfTag<T>>;
-
-    valuesOf: <T extends HKT>(tag: TypeTag<T>) => TypeTag<ValuesOfTag<T>>;
-
-    access: <T extends HKT, K extends HKT>(tag: TypeTag<T>, key: TypeTag<K>) => TypeTag<AccessTag<T, K>>;
-
-    record: {
-        <V extends HKT>(valueShape: TypeTag<V>): TypeTag<DynRecord<V>>;
-        <K extends HKT, V extends HKT>(keys: TypeTag<K>, valueShape: TypeTag<V>): TypeTag<RecordFromKeys<K, V>>;
-    };
-    /** Function type: `(input: In) => Out`. */
-    fn: <In extends HKT, Out extends HKT>(input: TypeTag<In>, output: TypeTag<Out>) => TypeTag<Fn<In, Out>>;
-
-    /**
-     * Dictionary type. Overloads:
-     * - `dict(valueType)` — free keys
-     */
-    dict: <V extends HKT>(valueShape: TypeTag<V>) => TypeTag<DynRecord<V>>;
-
-    /** Intersection: `A & B`. */
-    merge: <A extends HKT, B extends HKT>(
-        a: TypeTag<A>,
-        b: TypeTag<B>,
-    ) => TypeTag<Merge<A, B>>;
-    /** Union: `A | B`. */
-    oneOf: <A extends HKT, B extends HKT>(
-        a: TypeTag<A>,
-        b: TypeTag<B>,
-    ) => TypeTag<OneOf<A, B>>;
-    /** Array type. */
-    array: <E extends HKT>(element: TypeTag<E>) => TypeTag<Arr<E>>;
-    /** Promise wrapper. */
-    promise: <F extends HKT>(inner: TypeTag<F>) => TypeTag<PromiseHKT<F>>;
-    /** Nullable: `T | null`. */
-    nullable: <NF extends HKT>(inner: TypeTag<NF>) => TypeTag<Nullable<NF>>;
-    /** Nested object with a typed shape. */
-    object: <Sh extends Record<string, TypeTag<any>>>(
-        shape: Sh,
-    ) => TypeTag<Obj<{ [P in keyof Sh & string]: Unwrap<Sh[P]> }>>;
 }
 
 // ── schema() — step-builder with full autocomplete ───────────

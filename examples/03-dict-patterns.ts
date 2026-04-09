@@ -4,10 +4,10 @@
  * Shows every way to create constrained dictionaries:
  *
  *   Pattern 1: Free keys        — ty.record(valueType)
- *   Pattern 2: Keys from object — $.record($.keysOf($.ref("obj")), valueType)
- *   Pattern 3: Keys from array  — $.record($.array($.ref("arr")), valueType)
- *   Pattern 4: Keys from string — $.record($.keysOf($.ref("str")), valueType)
- *   Pattern 5: Deep path keys   — $.record($.ref("ref").a.b, valueType)
+ *   Pattern 2: Keys from object — ty.record(ty.keysOf($.ref("obj")), valueType)
+ *   Pattern 3: Keys from array  — ty.record(ty.keysOf($.ref("arr")), valueType)
+ *   Pattern 4: Keys from string — ty.record(ty.keysOf($.ref("str")), valueType)
+ *   Pattern 5: Deep path keys   — ty.record($.ref("ref").a.b, valueType)
  */
 import { schema, ty } from "../src";
 
@@ -43,7 +43,7 @@ const FeatureFlags = schema()
         betaAccess: ty.boolean,
         analytics: ty.boolean,
     }))
-    .field("descriptions", $ => $.record($.keysOf($.ref("features")), $.string))
+    .field("descriptions", $ => ty.record(ty.keysOf($.ref("features")), ty.string))
     .done();
 
 const flags = FeatureFlags
@@ -66,7 +66,7 @@ console.log("Pattern 2:", flags);
 
 const RBAC = schema()
     .field("roles", ty.array(ty.string))
-    .field("permissions", $ => $.record($.keysOf($.ref("roles")), $.type<{
+    .field("permissions", $ => ty.record(ty.keysOf($.ref("roles")), ty.type<{
         canRead: boolean;
         canWrite: boolean;
         canDelete: boolean;
@@ -94,9 +94,9 @@ console.log("Pattern 3:", rbac);
 
 const Namespace = schema()
     .field("tenant", ty.string)
-    .field("config", $ => $.merge(
-        $.type<{ version: number }>(),
-        $.record($.keysOf($.ref("tenant")), $.string),
+    .field("config", $ => ty.merge(
+        ty.type<{ version: number }>(),
+        ty.record(ty.keysOf($.ref("tenant")), ty.string),
     ))
     .done();
 
@@ -125,9 +125,9 @@ const Routing = schema()
         }),
     })))
     // Keys from config.label values
-    .field("timeouts", $ => $.record(
-        $.access($.valuesOf($.map($.ref("channels"), c => $.access(c, ty.type<"config">()))), ty.type<"label">()),
-        $.number
+    .field("timeouts", $ => ty.record(
+        $.ref("channels").config.label,
+        ty.number
     ))
     .done();
 

@@ -5,9 +5,9 @@
  * Each dictionary value's TYPE depends on the specific key's entry data.
  *
  * Key concepts:
- *   - $.map($.ref("ref"), e => ...) — per-key projection
+ *   - ty.map($.ref("ref"), e => ...) — per-key projection
  *   - e.field                       — access entry field (auto-unwraps TypeTag)
- *   - $.fn(input, output)           — typed function per entry
+ *   - ty.fn(input, output)           — typed function per entry
  *   - Inner builders: b => b.entry(...).done()
  */
 import { schema, ty } from "../src";
@@ -32,8 +32,8 @@ const ApiRouter = schema()
         method: ty.type<"GET" | "POST" | "PUT" | "DELETE">(),
     })))
     // Per-key projection: each handler is a function typed by its endpoint
-    .field("handlers", $ => $.map($.ref("endpoints"), e =>
-        $.fn(e.request, e.response),
+    .field("handlers", $ => ty.map($.ref("endpoints"), e =>
+        ty.fn(e.request, e.response),
     ))
     .done();
 
@@ -83,9 +83,9 @@ const ArrayPipeline = schema()
         input: ty.desc,
         output: ty.desc,
     })))
-    .field("processors", $ => $.map(
+    .field("processors", $ => ty.map(
         $.ref("tasks").name,
-        e => $.fn(e.input, e.output)
+        e => ty.fn(e.input, e.output)
     ))
     .done();
 
@@ -128,8 +128,8 @@ const InnerBuilderDemo = schema()
         input: ty.desc,
         output: ty.desc,
     })))
-    .field("pipeline", $ => $.array($.object({
-        task: $.keysOf($.ref("tasks")),
+    .field("pipeline", $ => ty.array(ty.object({
+        task: ty.keysOf($.ref("tasks")),
         priority: ty.type<"low" | "medium" | "high">(),
     })))
     .done();

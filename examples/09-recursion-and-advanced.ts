@@ -18,7 +18,7 @@ import { schema, ty } from "../src";
 const TreeSchema = schema()
     .field("nodeId", ty.string)
     // $.self() refers to the entire TreeSchema output!
-    .field("children", $ => $.array($.self()))
+    .field("children", $ => ty.array($.self()))
     .done();
 
 const myTree = TreeSchema
@@ -119,12 +119,12 @@ console.log("First body component:", myUI.rootNode.slots.body[0].type);
 
 const GraphSchema = schema()
     .field("nodeIds", ty.array(ty.string))
-    .field("nodes", $ => $.record(
-        $.keysOf($.ref("nodeIds")),
-        $.object({
+    .field("nodes", $ => ty.record(
+        ty.keysOf($.ref("nodeIds")),
+        ty.object({
             label: ty.string,
             // Edges must point to valid node IDs
-            edges: $.array($.keysOf($.ref("nodeIds")))
+            edges: ty.array(ty.keysOf($.ref("nodeIds")))
         })
     ))
     .done();
@@ -150,10 +150,10 @@ const TypedFormBuilder = schema()
     // The catalog of available types
     .field("typeMap", ty.record(ty.desc))
     // The form definition
-    .field("fields", $ => $.record($.keysOf($.ref("typeMap"))))
+    .field("fields", $ => ty.record(ty.keysOf($.ref("typeMap"))))
     // The actual values!
-    .field("values", $ => $.map($.ref("fields"), fieldType => 
-        $.access($.ref("typeMap"), fieldType)
+    .field("values", $ => ty.map($.ref("fields"), fieldType => 
+        ty.access($.ref("typeMap"), fieldType)
     ))
     .done();
 

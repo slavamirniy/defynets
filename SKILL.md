@@ -60,12 +60,12 @@ The builder analyzes `$.ref()` calls and computes the dependency graph. Methods 
 ```typescript
 const App = schema()
     .field("types",    ty.record(ty.desc))                                           // Level 0 (no deps)
-    .field("methods",  $ => $.record($.object({                                      // Level 1 (← types)
-        input: $.keysOf($.ref("types")),
-        output: $.keysOf($.ref("types")),
+    .field("methods",  $ => ty.record(ty.object({                                      // Level 1 (← types)
+        input: ty.keysOf($.ref("types")),
+        output: ty.keysOf($.ref("types")),
     })))
-    .field("handlers", $ => $.map($.ref("methods"), m =>                             // Level 2 (← methods ← types)
-        $.fn($.access($.ref("types"), m.input), $.access($.ref("types"), m.output)),
+    .field("handlers", $ => ty.map($.ref("methods"), m =>                             // Level 2 (← methods ← types)
+        ty.fn(ty.access($.ref("types"), m.input), ty.access($.ref("types"), m.output)),
     ))
     .done();
 
@@ -134,7 +134,7 @@ Inner builders are recursive — inside `.add()`, `.entry()`, `.defineX()` callb
 
 ---
 
-## ty.* API (outside callbacks)
+## ty.* API
 
 | Method | Type | Example |
 |--------|------|---------|
@@ -147,7 +147,12 @@ Inner builders are recursive — inside `.add()`, `.entry()`, `.defineX()` callb
 | `ty.object(shape)` | `{ ... }` | `ty.object({ host: ty.string, port: ty.number })` |
 | `ty.array(el)` | `readonly T[]` | `ty.array(ty.string)` |
 | `ty.record(val)` | `Record<string, V>` | `ty.record(ty.string)` — free-key dict |
+| `ty.record(keys, val)` | Constrained dict | `ty.record(ty.keysOf($.ref("roles")), ty.string)` |
 | `ty.fn(in, out)` | `(in) => out` | `ty.fn(ty.type<Request>(), ty.type<Response>())` |
+| `ty.map(source, e => expr)` | Per-key projection | `ty.map($.ref("tasks"), e => ty.fn(e.input, e.output))` |
+| `ty.keysOf(tag)` | Extract keys | `ty.keysOf($.ref("roles"))` |
+| `ty.valuesOf(tag)` | Extract values | `ty.valuesOf($.ref("config"))` |
+| `ty.access(tag, keyTag)` | Type-level lookup | `ty.access($.ref("types"), method.input)` |
 | `ty.nullable(inner)` | `T \| null` | `ty.nullable(ty.string)` |
 | `ty.merge(a, b)` | `A & B` | `ty.merge(ty.type<{x: 1}>(), ty.type<{y: 2}>())` |
 | `ty.oneOf(a, b)` | `A \| B` | `ty.oneOf(ty.string, ty.number)` |
@@ -157,18 +162,10 @@ Inner builders are recursive — inside `.add()`, `.entry()`, `.defineX()` callb
 
 Inside `.field("name", $ => ...)`:
 
-**All `ty.*` methods available** (`$.string`, `$.number`, `$.boolean`, `$.desc`, `$.type<T>()`, `$.object(...)`, `$.array(...)`, `$.fn(...)`, `$.nullable(...)`, `$.merge(...)`, `$.oneOf(...)`, `$.promise(...)`), plus:
-
 | Method | Purpose | Example |
 |--------|---------|---------|
 | `$.ref("field")` | Reference a previously defined field. Returns RefTag supporting deep chaining | `$.ref("core").events.payload` |
-| `$.self()` | Schema-level self-reference (full schema output) | `$.array($.self())` — recursive schema |
-| `$.map(source, e => expr)` | Per-key projection. Source is RefTag. Entry `e` exposes fields of each dict/array element | `$.map($.ref("tasks"), e => $.fn(e.input, e.output))` |
-| `$.keysOf(tag)` | Extract keys from type: string → itself, array → elements, object → `keyof` | `$.keysOf($.ref("roles"))` |
-| `$.valuesOf(tag)` | Extract values from type | `$.valuesOf($.ref("config"))` |
-| `$.access(tag, keyTag)` | Type-level lookup: `tag[key]`. Auto-unwraps TypeTag to concrete type | `$.access($.ref("types"), method.input)` |
-| `$.record(val)` | Free-key dictionary | `$.record($.string)` |
-| `$.record(keys, val)` | Constrained-key dictionary | `$.record($.keysOf($.ref("roles")), $.string)` |
+| `$.self()` | Schema-level self-reference (full schema output) | `ty.array($.self())` — recursive schema |
 
 ### Deep path via RefTag chaining
 
@@ -180,13 +177,13 @@ $.ref("tasks").name           // → name field of array elements in "tasks"
 $.ref("config").db.host       // → deep path into nested object
 ```
 
-### Entry access in $.map callback
+### Entry access in ty.map callback
 
-Inside `$.map(source, entry => ...)`, `entry` supports property chaining to access fields of the current dict/array element:
+Inside `ty.map(source, entry => ...)`, `entry` supports property chaining to access fields of the current dict/array element:
 
 ```typescript
-$.map($.ref("endpoints"), e =>
-    $.fn(e.request, e.response)  // e.request = request field of current entry
+ty.map($.ref("endpoints"), e =>
+    ty.fn(e.request, e.response)  // e.request = request field of current entry
 )
 ```
 

@@ -28,8 +28,8 @@ const CoreFramework = schema()
         payload: ty.desc,
         response: ty.desc,
     })))
-    .field("handlers", $ => $.map($.ref("events"), event =>
-        $.fn(event.payload, event.response),
+    .field("handlers", $ => ty.map($.ref("events"), event =>
+        ty.fn(event.payload, event.response),
     ));
 
 // ============================================================
@@ -43,14 +43,14 @@ const ApplicationDef = schema()
     // ▼ Outer fields reference inner schema's structure
     //   $.ref("core").events → keys from core.events dict
     //   event.payload → payload field of each event entry
-    .field("loggers", $ => $.map($.ref("core").events, event =>
-        $.fn(event.payload, ty.string),
+    .field("loggers", $ => ty.map($.ref("core").events, event =>
+        ty.fn(event.payload, ty.string),
     ))
 
-    .field("metrics", $ => $.map($.ref("core").events, event =>
-        $.object({
-            track: $.fn(event.payload, ty.type<void>()),
-            format: $.fn(event.response, ty.string),
+    .field("metrics", $ => ty.map($.ref("core").events, event =>
+        ty.object({
+            track: ty.fn(event.payload, ty.type<void>()),
+            format: ty.fn(event.response, ty.string),
         }),
     ));
 
@@ -139,15 +139,15 @@ const Observability = schema()
         threshold: ty.number,
         message: ty.string,
     })))
-    .field("notifiers", $ => $.map($.ref("alerts"), alert =>
-        $.fn(ty.object({ value: ty.number }), ty.boolean),
+    .field("notifiers", $ => ty.map($.ref("alerts"), alert =>
+        ty.fn(ty.object({ value: ty.number }), ty.boolean),
     ));
 
 const Platform = schema()
     .field("app", ApplicationDef)
     .field("observability", Observability)
-    .field("appLoggerNames", $ => $.record($.keysOf($.ref("app").loggers), ty.string))
-    .field("alertChannels", $ => $.record($.keysOf($.ref("observability").alerts), ty.string))
+    .field("appLoggerNames", $ => ty.record(ty.keysOf($.ref("app").loggers), ty.string))
+    .field("alertChannels", $ => ty.record(ty.keysOf($.ref("observability").alerts), ty.string))
     .done();
 
 // ============================================================
@@ -158,13 +158,13 @@ const Platform = schema()
 // that knows all previous fields.
 
 const WithLogging = CoreFramework
-    .field("loggers", $ => $.map($.ref("events"), event =>
-        $.fn(event.payload, ty.string),
+    .field("loggers", $ => ty.map($.ref("events"), event =>
+        ty.fn(event.payload, ty.string),
     ));
 
 const FullFramework = WithLogging
-    .field("validators", $ => $.map($.ref("events"), event =>
-        $.fn(event.payload, ty.boolean),
+    .field("validators", $ => ty.map($.ref("events"), event =>
+        ty.fn(event.payload, ty.boolean),
     ))
     .done();
 

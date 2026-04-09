@@ -7,8 +7,8 @@
  *
  * Key features demonstrated:
  *   1. ty.record(ty.desc) as a type registry
- *   2. $.keysOf($.ref("types")) inside object fields — constrains values to type names
- *   3. $.access($.ref("types"), method.input) — type-level join: entry.input → types[entry.input]
+ *   2. ty.keysOf($.ref("types")) inside object fields — constrains values to type names
+ *   3. ty.access($.ref("types"), method.input) — type-level join: entry.input → types[entry.input]
  *   4. Per-method typed handlers via Access + Fn
  */
 import { schema, ty } from "../src";
@@ -22,14 +22,14 @@ import { schema, ty } from "../src";
 
 const API = schema()
     .field("types", ty.record(ty.desc))
-    .field("methods", $ => $.record($.object({
-        input: $.keysOf($.ref("types")),
-        output: $.keysOf($.ref("types")),
+    .field("methods", $ => ty.record(ty.object({
+        input: ty.keysOf($.ref("types")),
+        output: ty.keysOf($.ref("types")),
     })))
-    .field("handlers", $ => $.map($.ref("methods"), method =>
-        $.fn(
-            $.access($.ref("types"), method.input), 
-            $.access($.ref("types"), method.output)
+    .field("handlers", $ => ty.map($.ref("methods"), method =>
+        ty.fn(
+            ty.access($.ref("types"), method.input), 
+            ty.access($.ref("types"), method.output)
         ),
     ))
     .done();
@@ -100,18 +100,18 @@ console.log("topUp result:", api.handlers.topUp({ userId: 1, amount: 100, curren
 
 const RoutedAPI = schema()
     .field("types", ty.record(ty.desc))
-    .field("methods", $ => $.record($.object({
-        input: $.keysOf($.ref("types")),
-        output: $.keysOf($.ref("types")),
+    .field("methods", $ => ty.record(ty.object({
+        input: ty.keysOf($.ref("types")),
+        output: ty.keysOf($.ref("types")),
         path: ty.string,
     })))
-    .field("handlers", $ => $.map($.ref("methods").path, method =>
-        $.fn(
-            $.access($.ref("types"), method.input), 
-            $.access($.ref("types"), method.output)
+    .field("handlers", $ => ty.map($.ref("methods").path, method =>
+        ty.fn(
+            ty.access($.ref("types"), method.input), 
+            ty.access($.ref("types"), method.output)
         ),
     ))
-    .field("routes", $ => $.array($.keysOf($.ref("methods"))))
+    .field("routes", $ => ty.array(ty.keysOf($.ref("methods"))))
     .done();
 
 const routed = RoutedAPI

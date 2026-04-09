@@ -19,14 +19,14 @@ export const Machine = schema()
 
   // 2. Describe transitions
   // We want a typed method transition(state, event) -> nextState
-  .field("logic", $ => $.map($.ref("states"), state => $.object({
+  .field("logic", $ => ty.map($.ref("states"), state => ty.object({
     // For each state, allow only events defined in it
-    send: $.fn(
-      $.keysOf(state.on), 
+    send: ty.fn(
+      ty.keysOf(state.on), 
       ty.type<void>()
     ),
     // Automatic mapping of state data to the handler
-    render: $.fn(state.data, ty.string)
+    render: ty.fn(state.data, ty.string)
   })))
   .done();
 
@@ -77,16 +77,16 @@ console.log(trafficLight.logic.red.render({ carsWaiting: 5 }));
 export const Pipeline = schema()
   .field("registry", ty.record(ty.desc)) // All data types in the system
   
-  .field("steps", $ => $.array(ty.object({
-    from: $.keysOf($.ref("registry")),
-    to:   $.keysOf($.ref("registry")),
+  .field("steps", $ => ty.array(ty.object({
+    from: ty.keysOf($.ref("registry")),
+    to:   ty.keysOf($.ref("registry")),
   })))
 
   // Consistency check: handlers must match steps
-  .field("handlers", $ => $.map($.ref("steps"), step => 
-    $.fn(
-      $.access($.ref("registry"), step.from),
-      $.access($.ref("registry"), step.to)
+  .field("handlers", $ => ty.map($.ref("steps"), step => 
+    ty.fn(
+      ty.access($.ref("registry"), step.from),
+      ty.access($.ref("registry"), step.to)
     )
   ))
   .done();
@@ -121,14 +121,14 @@ const Contracts = schema()
 
 const Worker = schema()
   .field("contracts", Contracts) 
-  .field("executors", $ => $.map($.ref("contracts").tasks, task => 
-    $.fn(task.input, $.promise(task.output))
+  .field("executors", $ => ty.map($.ref("contracts").tasks, task => 
+    ty.fn(task.input, ty.promise(task.output))
   ));
 
 const Orchestrator = schema()
   .field("contracts", Contracts)
-  .field("flows", $ => $.record($.array($.object({
-    taskName: $.keysOf($.ref("contracts").tasks),
+  .field("flows", $ => ty.record(ty.array(ty.object({
+    taskName: ty.keysOf($.ref("contracts").tasks),
     retryPolicy: ty.object({ maxAttempts: ty.number }),
   }))));
 

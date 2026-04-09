@@ -37,11 +37,11 @@ const API = schema()
         request: ty.desc,
         response: ty.desc,
     })))
-    .field("handlers", $ => $.map($.ref("endpoints"), e =>
-        $.fn(e.request, e.response),
+    .field("handlers", $ => ty.map($.ref("endpoints"), e =>
+        ty.fn(e.request, e.response),
     ))
-    .field("middleware", $ => $.map($.ref("endpoints"), e =>
-        $.fn(e.request, e.request),
+    .field("middleware", $ => ty.map($.ref("endpoints"), e =>
+        ty.fn(e.request, e.request),
     ))
     .done();
 ```
@@ -61,9 +61,9 @@ const App = schema()
     //        field             depends on
     .field("roles",       ty.array(ty.string))                                          // —
     .field("theme",       ty.string)                                                    // —
-    .field("permissions", $ => $.record($.keysOf($.ref("roles")), $.type<boolean>()))    // roles
+    .field("permissions", $ => ty.record(ty.keysOf($.ref("roles")), ty.type<boolean>()))    // roles
     .field("welcome",     $ => $.ref("theme"))                                          // theme
-    .field("summary",     $ => $.fn($.ref("permissions"), $.string))                    // permissions
+    .field("summary",     $ => ty.fn($.ref("permissions"), ty.string))                    // permissions
     .done();
 ```
 
@@ -108,9 +108,9 @@ const Machine = schema()
         on: ty.record(ty.string),
         data: ty.desc,
     })))
-    .field("logic", $ => $.map($.ref("states"), state => $.object({
-        send: $.fn($.keysOf(state.on), ty.type<void>()),
-        render: $.fn(state.data, ty.string),
+    .field("logic", $ => ty.map($.ref("states"), state => ty.object({
+        send: ty.fn(ty.keysOf(state.on), ty.type<void>()),
+        render: ty.fn(state.data, ty.string),
     })))
     .done();
 ```
@@ -163,14 +163,14 @@ const light = Machine
 ```typescript
 const Pipeline = schema()
     .field("registry", ty.record(ty.desc))
-    .field("steps", $ => $.array(ty.object({
-        from: $.keysOf($.ref("registry")),
-        to:   $.keysOf($.ref("registry")),
+    .field("steps", $ => ty.array(ty.object({
+        from: ty.keysOf($.ref("registry")),
+        to:   ty.keysOf($.ref("registry")),
     })))
-    .field("handlers", $ => $.map($.ref("steps"), step =>
-        $.fn(
-            $.access($.ref("registry"), step.from),
-            $.access($.ref("registry"), step.to),
+    .field("handlers", $ => ty.map($.ref("steps"), step =>
+        ty.fn(
+            ty.access($.ref("registry"), step.from),
+            ty.access($.ref("registry"), step.to),
         ),
     ))
     .done();
@@ -201,9 +201,9 @@ const nlp = Pipeline
 ```typescript
 const TypedForm = schema()
     .field("typeMap", ty.record(ty.desc))
-    .field("fields", $ => $.record($.keysOf($.ref("typeMap"))))
-    .field("values", $ => $.map($.ref("fields"), field =>
-        $.access($.ref("typeMap"), field),
+    .field("fields", $ => ty.record(ty.keysOf($.ref("typeMap"))))
+    .field("values", $ => ty.map($.ref("fields"), field =>
+        ty.access($.ref("typeMap"), field),
     ))
     .done();
 ```
@@ -304,7 +304,7 @@ const System = schema()
         darkMode: ty.boolean,
         analytics: ty.boolean,
     }))
-    .field("descriptions", $ => $.record($.keysOf($.ref("features")), $.string))
+    .field("descriptions", $ => ty.record(ty.keysOf($.ref("features")), ty.string))
     .done();
 
 const sys = System
@@ -318,14 +318,14 @@ const sys = System
     .build();
 ```
 
-`$.ref("features")` creates a dependency. `$.keysOf(...)` extracts the keys. `$.record(keys, valueType)` builds a constrained dictionary.
+`$.ref("features")` creates a dependency. `ty.keysOf(...)` extracts the keys. `ty.record(keys, valueType)` builds a constrained dictionary.
 
 **Keys from arrays — no `as const` needed:**
 
 ```typescript
 const RBAC = schema()
     .field("roles", ty.array(ty.string))
-    .field("permissions", $ => $.record($.keysOf($.ref("roles")), $.type<boolean>()))
+    .field("permissions", $ => ty.record(ty.keysOf($.ref("roles")), ty.type<boolean>()))
     .done();
 
 const rbac = RBAC
@@ -342,7 +342,7 @@ No `as const`. Roles defined first → permission keys inferred from the actual 
 ```typescript
 const Tenant = schema()
     .field("name", ty.string)
-    .field("quota", $ => $.record($.keysOf($.ref("name")), $.number))
+    .field("quota", $ => ty.record(ty.keysOf($.ref("name")), ty.number))
     .done();
 
 Tenant
@@ -353,7 +353,7 @@ Tenant
 
 ---
 
-### Step 3: Per-key projection — `$.map`
+### Step 3: Per-key projection — `ty.map`
 
 The most powerful feature. Instead of a uniform value type, **each key gets its own type** derived from the source entry.
 
@@ -368,8 +368,8 @@ type Handlers<T extends Record<string, { input: unknown; output: unknown }>> = {
 **With defynets:**
 
 ```typescript
-.field("handlers", $ => $.map($.ref("endpoints"), e =>
-    $.fn(e.request, e.response),
+.field("handlers", $ => ty.map($.ref("endpoints"), e =>
+    ty.fn(e.request, e.response),
 ))
 ```
 
@@ -383,8 +383,8 @@ const API = schema()
         request: ty.desc,
         response: ty.desc,
     })))
-    .field("handlers", $ => $.map($.ref("endpoints"), e =>
-        $.fn(e.request, e.response),
+    .field("handlers", $ => ty.map($.ref("endpoints"), e =>
+        ty.fn(e.request, e.response),
     ))
     .done();
 
@@ -411,8 +411,8 @@ const ArrayPipeline = schema()
         input: ty.desc,
         output: ty.desc,
     })))
-    .field("processors", $ => $.map($.ref("tasks").name, e =>
-        $.fn(e.input, e.output),
+    .field("processors", $ => ty.map($.ref("tasks").name, e =>
+        ty.fn(e.input, e.output),
     ))
     .done();
 ```
@@ -444,14 +444,14 @@ type ResolveMethods<
 ```typescript
 const API = schema()
     .field("types", ty.record(ty.desc))
-    .field("methods", $ => $.record($.object({
-        input:  $.keysOf($.ref("types")),
-        output: $.keysOf($.ref("types")),
+    .field("methods", $ => ty.record(ty.object({
+        input:  ty.keysOf($.ref("types")),
+        output: ty.keysOf($.ref("types")),
     })))
-    .field("handlers", $ => $.map($.ref("methods"), method =>
-        $.fn(
-            $.access($.ref("types"), method.input),
-            $.access($.ref("types"), method.output),
+    .field("handlers", $ => ty.map($.ref("methods"), method =>
+        ty.fn(
+            ty.access($.ref("types"), method.input),
+            ty.access($.ref("types"), method.output),
         ),
     ))
     .done();
@@ -501,14 +501,14 @@ const Core = schema()
         payload: ty.desc,
         response: ty.desc,
     })))
-    .field("handlers", $ => $.map($.ref("events"), event =>
-        $.fn(event.payload, event.response),
+    .field("handlers", $ => ty.map($.ref("events"), event =>
+        ty.fn(event.payload, event.response),
     ));
 
 const App = schema()
     .field("core", Core)
-    .field("loggers", $ => $.map($.ref("core").events, event =>
-        $.fn(event.payload, ty.string),
+    .field("loggers", $ => ty.map($.ref("core").events, event =>
+        ty.fn(event.payload, ty.string),
     ))
     .done();
 ```
@@ -549,7 +549,7 @@ Two kinds of self-reference for recursive types.
 ```typescript
 const Tree = schema()
     .field("nodeId", ty.string)
-    .field("children", $ => $.array($.self()))
+    .field("children", $ => ty.array($.self()))
     .done();
 ```
 
@@ -731,7 +731,12 @@ Methods with unmet deps don't show in autocomplete — no noise.
 | `ty.object({ k: ty.* })` | Nested object shape |
 | `ty.array(el)` | Readonly array |
 | `ty.record(valueType)` | Free-key dictionary |
+| `ty.record(keys, valueType)` | Constrained-key dictionary |
 | `ty.fn(in, out)` | Function type |
+| `ty.map(source, e => ...)` | Per-key projection over dict/array |
+| `ty.keysOf(tag)` | Extract keys: string → itself, array → elements, object → `keyof` |
+| `ty.valuesOf(tag)` | Extract values from a type |
+| `ty.access(tag, key)` | Type-level field access by key. Unwraps `TypeTag` automatically |
 | `ty.nullable(inner)` | `T \| null` |
 | `ty.merge(a, b)` | `A & B` |
 | `ty.oneOf(a, b)` | `A \| B` |
@@ -744,21 +749,6 @@ Methods with unmet deps don't show in autocomplete — no noise.
 |--------|-------------|
 | `$.ref("field")` | Reference another field. Supports deep path chaining: `$.ref("core").events` |
 | `$.self()` | Schema-level self-reference (entire schema output) |
-| `$.map(source, e => ...)` | Per-key projection over dict/array |
-| `$.keysOf(tag)` | Extract keys: string → itself, array → elements, object → `keyof` |
-| `$.valuesOf(tag)` | Extract values from a type |
-| `$.access(tag, key)` | Type-level field access by key. Unwraps `TypeTag` automatically |
-| `$.record(valueType)` | Free-key dictionary |
-| `$.record(keys, valueType)` | Constrained-key dictionary |
-| `$.fn(in, out)` | Function type |
-| `$.object({ ... })` | Nested object shape |
-| `$.array(el)` | Readonly array |
-| `$.merge(a, b)` | `A & B` |
-| `$.oneOf(a, b)` | `A \| B` |
-| `$.nullable(inner)` | `T \| null` |
-| `$.promise(inner)` | `Promise<T>` |
-| `$.type<T>()` | Explicit TypeScript type |
-| `$.string`, `$.number`, `$.boolean`, `$.desc` | Primitives |
 
 ## API
 

@@ -35,13 +35,13 @@ const ProductCard = schema()
 
     // localizedTitle: a record { [locale]: string }
     // e.g. locale = "en" → { en: "Red Sneakers" }
-    .field("localizedTitle", $ => $.record($.keysOf($.ref("locale")), $.string))
+    .field("localizedTitle", $ => ty.record(ty.keysOf($.ref("locale")), ty.string))
 
     // priceLabel: { formatted: string } & { [currency]: string }
     // e.g. currency = "usd" → { formatted: "$99.99", usd: "99.99" }
-    .field("priceLabel", $ => $.merge(
-        $.type<{ formatted: string }>(),
-        $.record($.keysOf($.ref("currency")), $.string),
+    .field("priceLabel", $ => ty.merge(
+        ty.type<{ formatted: string }>(),
+        ty.record(ty.keysOf($.ref("currency")), ty.string),
     ))
 
     // mirror: exact copy of priceLabel's resolved type
@@ -83,7 +83,7 @@ const SettingsOverride = schema()
         notifications: ty.boolean,
     }))
     // overrides: nullable version of each default key
-    .field("overrides", $ => $.map($.ref("defaults"), () => $.nullable($.string)))
+    .field("overrides", $ => ty.map($.ref("defaults"), () => ty.nullable(ty.string)))
     .done();
 
 const userPrefs = SettingsOverride
