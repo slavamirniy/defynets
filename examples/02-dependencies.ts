@@ -5,10 +5,10 @@
  * The builder only shows defineX() when X's dependencies are satisfied.
  *
  * Key concepts:
- *   - $.ref("field")  — value must match the referenced field
- *   - $.keysOf(tag)   — extract keys from a field
- *   - $.merge(A, B)   — intersection of two types
- *   - $.record(keys, valueType) — dictionary with constrained keys
+ *   - $.ref("field")              — reference another field ($ is only for refs)
+ *   - ty.keysOf($.ref("field"))   — extract keys from a referenced field
+ *   - ty.merge(A, B)              — intersection of two types
+ *   - ty.record(keys, valueType)  — dictionary with constrained keys
  */
 import { schema, ty } from "../src";
 

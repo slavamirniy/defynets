@@ -2,7 +2,7 @@
 
 **A declarative DSL that replaces TypeScript generic gymnastics with readable schema definitions.**
 
-Instead of `[K in keyof T]: T[K] extends ...` — write `$.map`, `$.ref`, `$.access`.
+Instead of `[K in keyof T]: T[K] extends ...` — write `ty.map`, `$.ref`, `ty.access`.
 Same type safety. Zero generic parameters. Reads like a spec.
 
 **[▶ Try it in the Playground](https://stackblitz.com/edit/defynets?file=playground.ts)**
@@ -49,6 +49,27 @@ const API = schema()
 Read it: *"Endpoints have request/response descriptors. Handlers map each endpoint to request → response. Middleware maps each endpoint to request → request."*
 
 That's **architecture as code**. The builder enforces dependency order, provides per-field autocomplete, and catches every mismatch at compile time. Adding validation? One more `.field()` — zero existing code changed.
+
+---
+
+## `$` is only for references
+
+Inside a field callback `$ => ...`, the `$` object has exactly two methods:
+
+| Method | What it does |
+|--------|-------------|
+| `$.ref("field")` | Reference another field. Supports deep path chaining: `$.ref("core").events` |
+| `$.self()` | Schema-level self-reference (entire schema output) |
+
+Everything else — `map`, `keysOf`, `record`, `access`, `merge`, `fn`, `array`, etc. — lives on `ty`. The `$` just connects fields to each other; `ty` describes shapes.
+
+```typescript
+.field("handlers", $ => ty.map($.ref("endpoints"), e =>
+    ty.fn(e.request, e.response),
+))
+//                  ^^ ty does the mapping
+//         ^^^^^^^^^ $ just points to "endpoints"
+```
 
 ---
 
@@ -279,9 +300,9 @@ Objects get `b.defineX(v).build()`. Arrays get `b.add(v).done()`. Dicts get `b.e
 
 ---
 
-### Step 2: Fields that reference each other — `$.ref`, `$.keysOf`, `$.record`
+### Step 2: Fields that reference each other — `$.ref`
 
-Fields can depend on other fields. The builder only shows `defineX()` when X's dependencies are satisfied.
+Fields can depend on other fields. The builder only shows `defineX()` when X's dependencies are satisfied. `$` provides `$.ref("field")` to create these connections; all type operations stay on `ty`.
 
 **Without defynets:**
 
@@ -421,9 +442,9 @@ const ArrayPipeline = schema()
 
 ---
 
-### Step 4: Type catalog — `$.access`
+### Step 4: Type catalog — `ty.access`
 
-Define types once, reference everywhere. `$.access` resolves a type from a registry by key — a **type-level join**.
+Define types once, reference everywhere. `ty.access` resolves a type from a registry by key — a **type-level join**.
 
 **Without defynets:**
 
@@ -475,7 +496,7 @@ const api = API
     .build();
 ```
 
-`method.input` is `"user"`. `$.access($.ref("types"), method.input)` resolves to the actual `{ id: number, name: string }` type.
+`method.input` is `"user"`. `ty.access($.ref("types"), method.input)` resolves to the actual `{ id: number, name: string }` type.
 
 ---
 
@@ -743,7 +764,9 @@ Methods with unmet deps don't show in autocomplete — no noise.
 | `ty.promise(inner)` | `Promise<T>` |
 | `ty.self()` | Recursive self-reference (inside `ty.object`) |
 
-## The `$` DSL (inside field callbacks)
+## The `$` ref scope (inside field callbacks)
+
+`$` is available inside `schema().field("name", $ => ...)`. Its sole purpose is to create references between fields — all type operations stay on `ty`.
 
 | Method | What it does |
 |--------|-------------|
@@ -774,12 +797,12 @@ Progressive — [`examples/`](./examples):
 | # | File | What it shows |
 |---|------|---------------|
 | 1 | [01-hello-world.ts](examples/01-hello-world.ts) | Schema basics with `ty.*` |
-| 2 | [02-dependencies.ts](examples/02-dependencies.ts) | `$.ref`, `$.keysOf`, `$.record`, `$.merge`, `$.map` |
+| 2 | [02-dependencies.ts](examples/02-dependencies.ts) | `$.ref`, `ty.keysOf`, `ty.record`, `ty.merge`, `ty.map` |
 | 3 | [03-dict-patterns.ts](examples/03-dict-patterns.ts) | Five ways to derive dict keys |
-| 4 | [04-projections.ts](examples/04-projections.ts) | Per-key projections with `$.map`, inner builders |
+| 4 | [04-projections.ts](examples/04-projections.ts) | Per-key projections with `ty.map`, inner builders |
 | 5 | [05-full-pipeline.ts](examples/05-full-pipeline.ts) | Complete multi-level system |
 | 6 | [06-meta-framework.ts](examples/06-meta-framework.ts) | Nested schemas, modular composition |
-| 7 | [07-type-catalog.ts](examples/07-type-catalog.ts) | Type catalog with `$.access` |
+| 7 | [07-type-catalog.ts](examples/07-type-catalog.ts) | Type catalog with `ty.access` |
 | 8 | [08-fsm-pipeline-worker.ts](examples/08-fsm-pipeline-worker.ts) | FSM, pipeline, worker queue |
 | 9 | [09-recursion-and-advanced.ts](examples/09-recursion-and-advanced.ts) | `$.self()`, `ty.self()`, graphs, dynamic form builder |
 | 10 | [10-playground.ts](examples/10-playground.ts) | RPC + recursive workflows + component system — all features combined |
