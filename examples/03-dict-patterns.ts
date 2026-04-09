@@ -3,11 +3,11 @@
  *
  * Shows every way to create constrained dictionaries:
  *
- *   Pattern 1: Free keys        — ty.dict(valueType)
- *   Pattern 2: Keys from object — $.dict($.from("obj"), valueType)
- *   Pattern 3: Keys from array  — $.dict($.from("arr"), valueType)
- *   Pattern 4: Keys from string — $.dict($.from("str"), valueType)
- *   Pattern 5: Deep path keys   — $.dict($.from("ref", "a", "b"), valueType)
+ *   Pattern 1: Free keys        — ty.record(valueType)
+ *   Pattern 2: Keys from object — $.record($.keysOf($.ref("obj")), valueType)
+ *   Pattern 3: Keys from array  — $.record($.array($.ref("arr")), valueType)
+ *   Pattern 4: Keys from string — $.record($.keysOf($.ref("str")), valueType)
+ *   Pattern 5: Deep path keys   — $.record($.ref("ref").a.b, valueType)
  */
 import { schema, ty } from "../src";
 
@@ -17,7 +17,7 @@ import { schema, ty } from "../src";
 //  User can use any string keys. No constraints.
 
 const FreeDict = schema()
-    .field("env", ty.dict(ty.string))
+    .field("env", ty.record(ty.string))
     .done();
 
 const env = FreeDict
@@ -43,7 +43,7 @@ const FeatureFlags = schema()
         betaAccess: ty.boolean,
         analytics: ty.boolean,
     }))
-    .field("descriptions", $ => $.dict($.from("features"), $.string))
+    .field("descriptions", $ => $.record($.keysOf($.ref("features")), $.string))
     .done();
 
 const flags = FeatureFlags
@@ -66,7 +66,7 @@ console.log("Pattern 2:", flags);
 
 const RBAC = schema()
     .field("roles", ty.array(ty.string))
-    .field("permissions", $ => $.dict($.from("roles"), $.type<{
+    .field("permissions", $ => $.record($.keysOf($.ref("roles")), $.type<{
         canRead: boolean;
         canWrite: boolean;
         canDelete: boolean;
@@ -96,7 +96,7 @@ const Namespace = schema()
     .field("tenant", ty.string)
     .field("config", $ => $.merge(
         $.type<{ version: number }>(),
-        $.dict($.from("tenant"), $.string),
+        $.record($.keysOf($.ref("tenant")), $.string),
     ))
     .done();
 
@@ -117,7 +117,7 @@ console.log("Pattern 4:", ns);
 //  → keys = values of tasks[*].input.channel.name
 
 const Routing = schema()
-    .field("channels", ty.dict(ty.object({
+    .field("channels", ty.record(ty.object({
         transport: ty.type<"http" | "ws" | "grpc">(),
         config: ty.object({
             label: ty.string,
@@ -125,7 +125,10 @@ const Routing = schema()
         }),
     })))
     // Keys from config.label values
-    .field("timeouts", $ => $.dict($.from("channels", "config", "label"), $.number))
+    .field("timeouts", $ => $.record(
+        $.access($.valuesOf($.map($.ref("channels"), c => $.access(c, ty.type<"config">()))), ty.type<"label">()),
+        $.number
+    ))
     .done();
 
 const routing = Routing

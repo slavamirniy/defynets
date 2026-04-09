@@ -6,10 +6,10 @@
  * the type name to the actual concrete type.
  *
  * Key features demonstrated:
- *   1. ty.dict(ty.desc) as a type registry
- *   2. $.from("types") inside object fields — constrains values to type names
- *   3. $$.lookup("types", "input") — type-level join: entry.input → types[entry.input]
- *   4. Per-method typed handlers via Lookup + Fn
+ *   1. ty.record(ty.desc) as a type registry
+ *   2. $.keysOf($.ref("types")) inside object fields — constrains values to type names
+ *   3. $.access($.ref("types"), method.input) — type-level join: entry.input → types[entry.input]
+ *   4. Per-method typed handlers via Access + Fn
  */
 import { schema, ty } from "../src";
 
@@ -21,13 +21,16 @@ import { schema, ty } from "../src";
 // "handlers" are typed per-method based on the resolved types.
 
 const API = schema()
-    .field("types", ty.dict(ty.desc))
-    .field("methods", $ => $.dict($.object({
-        input: $.from("types"),
-        output: $.from("types"),
+    .field("types", ty.record(ty.desc))
+    .field("methods", $ => $.record($.object({
+        input: $.keysOf($.ref("types")),
+        output: $.keysOf($.ref("types")),
     })))
-    .field("handlers", $ => $.dict($.from("methods"), $$ =>
-        $$.fn($$.lookup("types", "input"), $$.lookup("types", "output")),
+    .field("handlers", $ => $.map($.ref("methods"), method =>
+        $.fn(
+            $.access($.ref("types"), method.input), 
+            $.access($.ref("types"), method.output)
+        ),
     ))
     .done();
 
@@ -96,16 +99,19 @@ console.log("topUp result:", api.handlers.topUp({ userId: 1, amount: 100, curren
 // ============================================================
 
 const RoutedAPI = schema()
-    .field("types", ty.dict(ty.desc))
-    .field("methods", $ => $.dict($.object({
-        input: $.from("types"),
-        output: $.from("types"),
-        path: $.string,
+    .field("types", ty.record(ty.desc))
+    .field("methods", $ => $.record($.object({
+        input: $.keysOf($.ref("types")),
+        output: $.keysOf($.ref("types")),
+        path: ty.string,
     })))
-    .field("handlers", $ => $.dict($.from("methods"), $$ =>
-        $$.fn($$.lookup("types", "input"), $$.lookup("types", "output")),
+    .field("handlers", $ => $.map($.ref("methods").path, method =>
+        $.fn(
+            $.access($.ref("types"), method.input), 
+            $.access($.ref("types"), method.output)
+        ),
     ))
-    .field("routes", $ => $.array($.from("methods")))
+    .field("routes", $ => $.array($.keysOf($.ref("methods"))))
     .done();
 
 const routed = RoutedAPI
@@ -117,7 +123,7 @@ const routed = RoutedAPI
         search: { input: "query", output: "results", path: "/api/search" },
     })
     .defineHandlers({
-        search: (q) => ({
+        "/api/search": (q) => ({
             items: [q.q],
             total: q.limit,
         }),
@@ -126,4 +132,4 @@ const routed = RoutedAPI
     .build();
 
 console.log("Routes:", routed.routes);
-console.log("Search:", routed.handlers.search({ q: "hello", limit: 10 }));
+console.log("Search:", routed.handlers["/api/search"]({ q: "hello", limit: 10 }));

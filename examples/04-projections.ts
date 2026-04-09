@@ -1,13 +1,13 @@
 /**
  * Example 4 — Per-Key Projection & Inner Builders
  *
- * Shows the most powerful dict pattern: per-key projection with DictMap.
- * Each dict value's TYPE depends on the specific key's entry data.
+ * Shows the most powerful dictionary pattern: per-key projection with $.map.
+ * Each dictionary value's TYPE depends on the specific key's entry data.
  *
  * Key concepts:
- *   - dict(from("ref"), $$ => ...)  — per-key projection
- *   - $$("field")                   — access entry field (auto-unwraps TypeTag)
- *   - $$.fn(input, output)          — typed function per entry
+ *   - $.map($.ref("ref"), e => ...) — per-key projection
+ *   - e.field                       — access entry field (auto-unwraps TypeTag)
+ *   - $.fn(input, output)           — typed function per entry
  *   - Inner builders: b => b.entry(...).done()
  */
 import { schema, ty } from "../src";
@@ -26,14 +26,14 @@ import { schema, ty } from "../src";
 //  handler "createUser": (input: { name: string; email: string }) => { id: string; name: string }
 
 const ApiRouter = schema()
-    .field("endpoints", ty.dict(ty.object({
+    .field("endpoints", ty.record(ty.object({
         request: ty.desc,
         response: ty.desc,
         method: ty.type<"GET" | "POST" | "PUT" | "DELETE">(),
     })))
     // Per-key projection: each handler is a function typed by its endpoint
-    .field("handlers", $ => $.dict($.from("endpoints"), $$ =>
-        $$.fn($$("request"), $$("response")),
+    .field("handlers", $ => $.map($.ref("endpoints"), e =>
+        $.fn(e.request, e.response),
     ))
     .done();
 
@@ -74,8 +74,8 @@ console.log("API handlers:", Object.keys(api.handlers));
 // ============================================================
 //
 //  Same concept but tasks is an array.
-//  from("tasks", "name") → keys = name values ("resize", "compress")
-//  $$("input"), $$("output") → typed per entry
+//  $.ref("tasks").name → keys = name values ("resize", "compress")
+//  e.input, e.output → typed per entry
 
 const ArrayPipeline = schema()
     .field("tasks", ty.array(ty.object({
@@ -83,8 +83,9 @@ const ArrayPipeline = schema()
         input: ty.desc,
         output: ty.desc,
     })))
-    .field("processors", $ => $.dict($.from("tasks", "name"), $$ =>
-        $$.fn($$("input"), $$("output")),
+    .field("processors", $ => $.map(
+        $.ref("tasks").name,
+        e => $.fn(e.input, e.output)
     ))
     .done();
 
@@ -123,13 +124,13 @@ console.log("Pipeline processors:", Object.keys(pipeline.processors));
 //  obj   → b.defineX(v).build()
 
 const InnerBuilderDemo = schema()
-    .field("tasks", ty.dict(ty.object({
+    .field("tasks", ty.record(ty.object({
         input: ty.desc,
         output: ty.desc,
     })))
     .field("pipeline", $ => $.array($.object({
-        task: $.from("tasks"),
-        priority: $.type<"low" | "medium" | "high">(),
+        task: $.keysOf($.ref("tasks")),
+        priority: ty.type<"low" | "medium" | "high">(),
     })))
     .done();
 

@@ -11,9 +11,9 @@
  *
  * Key features demonstrated:
  *   1. .field("core", CoreFramework) — nested schema as a field
- *   2. $.from("core", "events")     — deep reference into nested schema
+ *   2. $.ref("core").events         — deep reference into nested schema
  *   3. Inner SmartBuilder           — defineCore(b => b.defineEvents(...).defineHandlers(...).build())
- *   4. $$("payload") / $$("response") — entry-scoped field access through nesting
+ *   4. e.payload / e.response       — entry-scoped field access through nesting
  */
 import { schema, ty } from "../src";
 
@@ -24,12 +24,12 @@ import { schema, ty } from "../src";
 // Handlers depend on events (internal dependency).
 
 const CoreFramework = schema()
-    .field("events", ty.dict(ty.object({
+    .field("events", ty.record(ty.object({
         payload: ty.desc,
         response: ty.desc,
     })))
-    .field("handlers", $ => $.dict($.from("events"), $$ =>
-        $$.fn($$("payload"), $$("response")),
+    .field("handlers", $ => $.map($.ref("events"), event =>
+        $.fn(event.payload, event.response),
     ));
 
 // ============================================================
@@ -41,16 +41,16 @@ const ApplicationDef = schema()
     .field("core", CoreFramework)
 
     // ▼ Outer fields reference inner schema's structure
-    //   $.from("core", "events") → keys from core.events dict
-    //   $$("payload") → payload field of each event entry
-    .field("loggers", $ => $.dict($.from("core", "events"), $$ =>
-        $$.fn($$("payload"), $$.string),
+    //   $.ref("core").events → keys from core.events dict
+    //   event.payload → payload field of each event entry
+    .field("loggers", $ => $.map($.ref("core").events, event =>
+        $.fn(event.payload, ty.string),
     ))
 
-    .field("metrics", $ => $.dict($.from("core", "events"), $$ =>
-        $$.object({
-            track: $$.fn($$("payload"), $$.type<void>()),
-            format: $$.fn($$("response"), $$.string),
+    .field("metrics", $ => $.map($.ref("core").events, event =>
+        $.object({
+            track: $.fn(event.payload, ty.type<void>()),
+            format: $.fn(event.response, ty.string),
         }),
     ));
 
@@ -135,19 +135,19 @@ console.log("App:", {
 // that already embed schemas.
 
 const Observability = schema()
-    .field("alerts", ty.dict(ty.object({
+    .field("alerts", ty.record(ty.object({
         threshold: ty.number,
         message: ty.string,
     })))
-    .field("notifiers", $ => $.dict($.from("alerts"), $$ =>
-        $$.fn($$.object({ value: $$.number }), $$.type<boolean>()),
+    .field("notifiers", $ => $.map($.ref("alerts"), alert =>
+        $.fn(ty.object({ value: ty.number }), ty.boolean),
     ));
 
 const Platform = schema()
     .field("app", ApplicationDef)
     .field("observability", Observability)
-    .field("appLoggerNames", $ => $.dict($.from("app", "loggers"), $.string))
-    .field("alertChannels", $ => $.dict($.from("observability", "alerts"), $.string))
+    .field("appLoggerNames", $ => $.record($.keysOf($.ref("app").loggers), ty.string))
+    .field("alertChannels", $ => $.record($.keysOf($.ref("observability").alerts), ty.string))
     .done();
 
 // ============================================================
@@ -158,13 +158,13 @@ const Platform = schema()
 // that knows all previous fields.
 
 const WithLogging = CoreFramework
-    .field("loggers", $ => $.dict($.from("events"), $$ =>
-        $$.fn($$("payload"), $$.string),
+    .field("loggers", $ => $.map($.ref("events"), event =>
+        $.fn(event.payload, ty.string),
     ));
 
 const FullFramework = WithLogging
-    .field("validators", $ => $.dict($.from("events"), $$ =>
-        $$.fn($$("payload"), $$.type<boolean>()),
+    .field("validators", $ => $.map($.ref("events"), event =>
+        $.fn(event.payload, ty.boolean),
     ))
     .done();
 

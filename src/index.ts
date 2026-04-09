@@ -144,6 +144,11 @@ interface Arr<E extends HKT> extends HKT {
     readonly _output: readonly Apply<E, this["_ctx"]>[];
 }
 
+interface PromiseHKT<F extends HKT> extends HKT {
+    readonly _deps: F["_deps"];
+    readonly _output: Promise<Apply<F, this["_ctx"]>>;
+}
+
 /**
  * Nullable wrapper: `T | null`.
  *
@@ -168,6 +173,15 @@ interface OneOf<A extends HKT, B extends HKT> extends HKT {
     readonly _output: Apply<A, this["_ctx"]> | Apply<B, this["_ctx"]>;
 }
 
+interface Self extends HKT {
+    readonly _deps: never;
+    readonly _output: this["_ctx"] extends { __self: infer S } ? S : never;
+}
+
+type ObjOutput<Shape extends Record<string, HKT>, Ctx> = {
+    [K in keyof Shape & string]: Apply<Shape[K], Ctx & { __self: ObjOutput<Shape, Ctx> }>;
+};
+
 /**
  * Nested object with a fixed shape of HKT fields.
  * Dependencies are the union of all field dependencies.
@@ -182,9 +196,7 @@ interface OneOf<A extends HKT, B extends HKT> extends HKT {
 interface Obj<Shape extends Record<string, HKT>> extends HKT {
     readonly _tag: "Obj";
     readonly _deps: Shape[keyof Shape]["_deps"];
-    readonly _output: Pretty<{
-        [K in keyof Shape & string]: Apply<Shape[K], this["_ctx"]>;
-    }>;
+    readonly _output: Pretty<ObjOutput<Shape, this["_ctx"]>>;
 }
 
 /**
@@ -264,21 +276,23 @@ interface DictFrom<K extends string, V extends HKT, Path extends string[] = []> 
                         : [Src] extends [string]
                             ? { [P in Src]: Apply<V, this["_ctx"]> }
                             : never
-            : [DeepGet<Src, Path>] extends [never]
-                ? Src extends readonly (infer El)[]
-                    ? DeepGet<El, Path> extends infer FV extends string
-                        ? { [P in FV]: Apply<V, this["_ctx"]> }
-                        : never
-                    : Src extends Record<string, infer Entry>
-                        ? DeepGet<Entry, Path> extends infer FV extends string
-                            ? { [P in FV]: Apply<V, this["_ctx"]> }
+            : Src extends readonly (infer El)[]
+                ? DeepGet<El, Path> extends infer FV extends string
+                    ? { [P in FV]: Apply<V, this["_ctx"]> }
+                    : never
+                : Src extends Record<string, any>
+                    ? [DeepGet<Src, Path>] extends [never]
+                        ? Src extends Record<string, infer Entry>
+                            ? DeepGet<Entry, Path> extends infer FV extends string
+                                ? { [P in FV]: Apply<V, this["_ctx"]> }
+                                : never
                             : never
-                        : never
-                : DeepGet<Src, Path> extends string
-                    ? { [P in DeepGet<Src, Path> & string]: Apply<V, this["_ctx"]> }
-                    : DeepGet<Src, Path> extends Record<string, any>
-                        ? { [P in keyof DeepGet<Src, Path> & string]: Apply<V, this["_ctx"]> }
-                        : never
+                        : DeepGet<Src, Path> extends string
+                            ? { [P in DeepGet<Src, Path> & string]: Apply<V, this["_ctx"]> }
+                            : DeepGet<Src, Path> extends Record<string, any>
+                                ? { [P in keyof DeepGet<Src, Path> & string]: Apply<V, this["_ctx"]> }
+                                : never
+                    : never
         : never;
 }
 
@@ -382,20 +396,24 @@ interface Desc<Source extends HKT> extends HKT {
  */
 interface DictMap<Source extends string, Proj extends HKT, Path extends string[] = []> extends HKT {
     readonly _deps: Source | Proj["_deps"];
-    readonly _output: this["_ctx"] extends Record<Source, infer Src extends Record<string, any>>
+    readonly _output: this["_ctx"] extends Record<Source, infer Src>
         ? Path extends []
             ? Src extends readonly any[]
                 ? { [P in Extract<keyof Src, `${number}`> & string]: Apply<Proj, this["_ctx"] & { readonly __entry: Src[P & keyof Src] }> }
-                : { [P in keyof Src & string]: Apply<Proj, this["_ctx"] & { readonly __entry: Src[P] }> }
-            : [DeepGet<Src, Path>] extends [never]
-                ? Src extends readonly (infer El extends Record<string, any>)[]
-                    ? DeepGet<El, Path> extends infer FV extends string
-                        ? { [P in FV]: Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Extract<El, DeepMatch<Path, P>>, InitPath<Path>> }> }
-                        : never
-                    : { [K2 in keyof Src & string as DeepGet<Src[K2], Path> extends infer FV extends string ? FV : never]:
-                        Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Src[K2], InitPath<Path>> }> }
-                : DeepGet<Src, Path> extends Record<string, any>
-                    ? { [P in keyof DeepGet<Src, Path> & string]: Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Src, Path>[P] }> }
+                : Src extends Record<string, any>
+                    ? { [P in keyof Src & string]: Apply<Proj, this["_ctx"] & { readonly __entry: Src[P] }> }
+                    : never
+            : Src extends readonly (infer El extends Record<string, any>)[]
+                ? DeepGet<El, Path> extends infer FV extends string
+                    ? { [P in FV]: Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Extract<El, DeepMatch<Path, P>>, InitPath<Path>> }> }
+                    : never
+                : Src extends Record<string, any>
+                    ? [DeepGet<Src, Path>] extends [never]
+                        ? { [K2 in keyof Src & string as DeepGet<Src[K2], Path> extends infer FV extends string ? FV : never]:
+                            Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Src[K2], InitPath<Path>> }> }
+                        : DeepGet<Src, Path> extends Record<string, any>
+                            ? { [P in keyof DeepGet<Src, Path> & string]: Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Src, Path>[P] }> }
+                            : never
                     : never
         : never;
 }
@@ -436,7 +454,9 @@ type ResolveField<H, Path extends readonly string[]> =
 
 /** @internal Gets available field names at a specific path depth within a schema field. */
 type FieldAt<S extends Record<string, HKT>, K extends string, Path extends string[]> =
-    ObjFieldNames<ResolveField<DictValueHKT<S[K]>, Path>>;
+    K extends "self"
+        ? Path extends [] ? keyof S & string : ObjFieldNames<ResolveField<Schema<S>, Path>>
+        : ObjFieldNames<ResolveField<DictValueHKT<S[K]>, Path>>;
 
 /**
  * Deep field access by path tuple.
@@ -445,8 +465,81 @@ type FieldAt<S extends Record<string, HKT>, K extends string, Path extends strin
  */
 type DeepGet<T, Path extends readonly string[]> =
     Path extends [infer F extends string, ...infer Rest extends string[]]
-        ? T extends Record<F, infer V> ? DeepGet<V, Rest> : never
+        ? T extends readonly (infer E)[]
+            ? DeepGet<E extends Record<F, infer V> ? V : never, Rest>
+            : T extends Record<F, infer V> ? DeepGet<V, Rest> : never
         : T;
+
+type UnwrapTypeTag<T, Ctx> = T extends TypeTag<infer H extends HKT> ? Apply<H, Ctx> : T;
+
+export interface DeepPluck<K extends string, Path extends string[], S extends Record<string, HKT> = {}> extends HKT {
+    readonly _deps: K extends "self" ? never : K;
+    readonly _output: UnwrapTypeTag<
+        K extends "self" 
+            ? DeepGet<this["_ctx"] extends { __selfSchema: infer Self } ? Self : SelfResolve<S, {}>, Path>
+            : DeepGet<this["_ctx"] extends Record<K, infer V> ? V : never, Path>,
+        this["_ctx"]
+    >;
+}
+
+interface DeepEntry<Path extends string[]> extends HKT {
+    readonly _deps: never;
+    readonly _output: this["_ctx"] extends { readonly __entry: infer E }
+        ? DeepGet<E, Path> extends TypeTag<infer H extends HKT> ? Apply<H, this["_ctx"]> : DeepGet<E, Path>
+        : never;
+}
+
+type RefTag<K extends string, S extends Record<string, HKT>, Path extends string[] = []> = TypeTag<DeepPluck<K, Path, S>> & {
+    [P in (K extends "self" ? keyof S & string : FieldAt<S, K, Path>)]: RefTag<K, S, [...Path, P]>
+};
+
+type EntryHKT<S extends Record<string, HKT>, K extends string, Pa extends string[]> =
+    ResolveField<DictValueHKT<S[K]>, Pa> extends DynRecord<infer V extends HKT>
+        ? V
+        : ResolveField<DictValueHKT<S[K]>, Pa> extends Arr<infer E extends HKT>
+            ? E
+            : DictValueHKT<ResolveField<DictValueHKT<S[K]>, InitPath<Pa>>>;
+
+type EntryFieldAt<S extends Record<string, HKT>, K extends string, Pa extends string[], Path extends string[]> =
+    ObjFieldNames<ResolveField<EntryHKT<S, K, Pa>, Path>>;
+
+type EntryRefTag<S extends Record<string, HKT>, K extends string, Pa extends string[], Path extends string[] = []> = TypeTag<DeepEntry<Path>> & {
+    [P in EntryFieldAt<S, K, Pa, Path>]: EntryRefTag<S, K, Pa, [...Path, P]>
+};
+
+interface RecordFromKeys<Keys extends HKT, V extends HKT> extends HKT {
+    readonly _deps: Keys["_deps"] | V["_deps"];
+    readonly _output: Apply<Keys, this["_ctx"]> extends string
+        ? { [P in Apply<Keys, this["_ctx"]>]: Apply<V, this["_ctx"]> }
+        : never;
+}
+
+interface ValuesOfTag<T extends HKT> extends HKT {
+    readonly _deps: T["_deps"];
+    readonly _output: Apply<T, this["_ctx"]> extends Record<string, infer V> ? V : never;
+}
+
+interface KeysOfTag<T extends HKT> extends HKT {
+    readonly _deps: T["_deps"];
+    readonly _output: Apply<T, this["_ctx"]> extends string
+        ? Apply<T, this["_ctx"]>
+        : Apply<T, this["_ctx"]> extends readonly (infer El extends string)[]
+            ? El
+            : Apply<T, this["_ctx"]> extends Record<string, any>
+                ? keyof Apply<T, this["_ctx"]> & string
+                : never;
+}
+
+interface AccessTag<T extends HKT, K extends HKT> extends HKT {
+    readonly _deps: T["_deps"] | K["_deps"];
+    readonly _output: Apply<K, this["_ctx"]> extends string
+        ? Apply<T, this["_ctx"]> extends infer U
+            ? U extends Record<Apply<K, this["_ctx"]>, infer V>
+                ? V extends TypeTag<infer H extends HKT> ? Apply<H, this["_ctx"]> : V
+                : never
+            : never
+        : never;
+}
 
 /** @internal Builds a nested pattern for `Extract`: `DeepMatch<["a","b"], V>` → `{ a: { b: V } }`. */
 type DeepMatch<Path extends readonly string[], V> =
@@ -486,7 +579,7 @@ type ExternalDeps<S extends Record<string, HKT>> =
 
 /** @internal Resolves a schema against itself + outer context (fixpoint). */
 type SelfResolve<S extends Record<string, HKT>, Ctx = {}> = {
-    [K in keyof S & string]: Apply<S[K], Ctx & SelfResolve<S, Ctx>>;
+    [K in keyof S & string]: Apply<S[K], Ctx & SelfResolve<S, Ctx> & { __selfSchema: SelfResolve<S, Ctx> }>;
 };
 
 /**
@@ -527,8 +620,8 @@ type SmartBuilder<
         ? never
         : S[K]["_deps"] extends keyof Ctx
             ? `define${Capitalize<K>}`
-            : never]: <const V extends Apply<S[K], Ctx>>(
-        valueOrFactory: V | ((b: BuilderFor<S[K], Ctx>) => V),
+            : never]: <const V extends Apply<S[K], Ctx & { __selfSchema: SelfResolve<S, {}> }>>(
+        valueOrFactory: (V & Apply<S[K], Ctx & { __selfSchema: SelfResolve<S, {}> }>) | ((b: BuilderFor<S[K], Ctx & { __selfSchemaBuilder: SmartBuilder<S>; __selfSchema: SelfResolve<S, {}> }>, ctx: Ctx) => V),
     ) => SmartBuilder<S, Pretty<Ctx & Record<K, V>>>;
 } & {
     /**
@@ -564,7 +657,11 @@ type BuilderFor<H extends HKT, Ctx> =
                 ? ArrStepBuilder<E, Ctx>
                 : H extends { _tag: "DynRecord" } & DynRecord<infer V extends HKT>
                     ? DictStepBuilder<V, Ctx>
-                    : never;
+                    : H extends Self
+                        ? Ctx extends { __selfBuilder: infer B } ? B : never
+                        : H extends DeepPluck<"self", [], any>
+                            ? Ctx extends { __selfSchemaBuilder: infer B } ? B : never
+                            : never;
 
 /**
  * Step-builder for `Obj<Shape>`.
@@ -577,8 +674,8 @@ type ObjStepBuilder<
 > = {
     [K in keyof Shape & string as K extends keyof Built
         ? never
-        : `define${Capitalize<K>}`]: <const V extends Apply<Shape[K], Ctx>>(
-        v: V | ((b: BuilderFor<Shape[K], Ctx>) => V),
+        : `define${Capitalize<K>}`]: <const V extends Apply<Shape[K], Ctx & { __self: ObjOutput<Shape, Ctx> }>>(
+        v: (V & Apply<Shape[K], Ctx & { __self: ObjOutput<Shape, Ctx> }>) | ((b: BuilderFor<Shape[K], Ctx & { __selfBuilder: ObjStepBuilder<Shape, Ctx>; __self: ObjOutput<Shape, Ctx> }>, ctx: Ctx) => V),
     ) => ObjStepBuilder<Shape, Ctx, Pretty<Built & Record<K, V>>>;
 } & {
     build: [Exclude<keyof Shape & string, keyof Built & string>] extends [never]
@@ -592,8 +689,8 @@ type ObjStepBuilder<
  */
 type ArrStepBuilder<E extends HKT, Ctx> = {
     /** Append an element to the array. */
-    add<const V extends Apply<E, Ctx>>(
-        v: V | ((b: BuilderFor<E, Ctx>) => V),
+    add<const V extends Apply<E, Ctx & { __self: Ctx extends { __self: infer S } ? S : never }>>(
+        v: (V & Apply<E, Ctx & { __self: Ctx extends { __self: infer S } ? S : never }>) | ((b: BuilderFor<E, Ctx & { __selfBuilder: Ctx extends { __selfBuilder: infer B } ? B : never }>, ctx: Ctx) => V),
     ): ArrStepBuilder<E, Ctx>;
     /** Finalize and return the readonly array. */
     done(): readonly Apply<E, Ctx>[];
@@ -607,7 +704,7 @@ type DictStepBuilder<V extends HKT, Ctx, Built extends Record<string, any> = {}>
     /** Add a key-value entry to the dictionary. */
     entry<K extends string, const Val extends Apply<V, Ctx>>(
         key: K,
-        v: Val | ((b: BuilderFor<V, Ctx>) => Val),
+        v: (Val & Apply<V, Ctx>) | ((b: BuilderFor<V, Ctx>, ctx: Ctx) => Val),
     ): DictStepBuilder<V, Ctx, Pretty<Built & Record<K, Val>>>;
     /** Finalize and return the dictionary. */
     done(): Pretty<Built>;
@@ -758,6 +855,11 @@ interface TyDSL {
     readonly desc: TypeTag<Const<TypeTag<any>>>;
 
     /**
+     * Self reference for recursive object definitions.
+     */
+    self(): TypeTag<Self>;
+
+    /**
      * Explicit TypeScript type. Use when primitives aren't specific enough.
      *
      * @example
@@ -782,45 +884,12 @@ interface TyDSL {
     ref<K extends string>(key: K): TypeTag<Pluck<K>>;
 
     /**
-     * Source reference for dict keys and value access.
-     *
-     * - `from("ref")` — keys/value from `ctx[ref]` (auto-detects string, array, object)
-     * - `from("ref", "field")` — keys from `ref[*].field` values
-     * - `from("ref", "a", "b")` — keys via deep path
-     *
-     * When used as the first argument of `dict()`, constrains the dictionary keys.
-     * When used as a field type inside `object()`, acts like `ref()`.
-     *
-     * @example
-     * $.dict($.from("features"), $.boolean)                // keys from object
-     * $.dict($.from("roles"), $.type<boolean>())           // keys from array
-     * $.dict($.from("tasks", "name"), $$ => $$.fn(...))    // keys from deep path
-     */
-    from<K extends string, P extends string[]>(ref: K, ...path: P): KeySource<K, P>;
-
-    /**
-     * Dictionary type. Three overloads:
-     *
-     * 1. `dict(valueType)` — free keys, user chooses any string keys
-     * 2. `dict(from("ref"), valueType)` — keys constrained by another field
-     * 3. `dict(from("ref"), $$ => ...)` — per-key projection with entry access
-     *
+     * Dictionary type.
      * @example
      * // Free keys:
-     * ty.dict(ty.string)   // Record<string, string>
-     *
-     * // Constrained keys:
-     * $.dict($.from("roles"), $.type<boolean>())
-     * // defineRoles(["admin"]) → definePerms({ admin: true })
-     *
-     * // Per-key projection:
-     * $.dict($.from("tasks"), $$ => $$.fn($$("input"), $$("output")))
+     * ty.record(ty.string)   // Record<string, string>
      */
-    dict: {
-        <V extends HKT>(valueShape: TypeTag<V>): TypeTag<DynRecord<V>>;
-        <K extends string, Pa extends string[], V extends HKT>(source: KeySource<K, Pa>, valueShape: TypeTag<V>): TypeTag<DictFrom<K, V, Pa>>;
-        <K extends string, Pa extends string[], P extends HKT>(source: KeySource<K, Pa>, proj: ($$: EntryScopedTy<string>) => TypeTag<P>): TypeTag<DictMap<K, P, Pa>>;
-    };
+    record: <V extends HKT>(valueShape: TypeTag<V>) => TypeTag<DynRecord<V>>;
 
     /**
      * Function type: `(input: In) => Out`.
@@ -859,6 +928,11 @@ interface TyDSL {
     array<E extends HKT>(element: TypeTag<E>): TypeTag<Arr<E>>;
 
     /**
+     * Promise wrapper: `Promise<T>`.
+     */
+    promise<F extends HKT>(inner: TypeTag<F>): TypeTag<PromiseHKT<F>>;
+
+    /**
      * Nullable: `T | null`.
      *
      * @example
@@ -885,11 +959,10 @@ const ty: TyDSL = {
     number: tag<Const<number>>(),
     boolean: tag<Const<boolean>>(),
     desc: tag<Const<TypeTag<any>>>(),
+    self: () => tag<Self>(),
     type: <T>() => tag<Const<T>>(),
     ref: <K extends string>(key: K) => tag<Pluck<K>>(),
-    from: <K extends string, P extends string[]>(ref: K, ...path: P) =>
-        null! as KeySource<K, P>,
-    dict: tag as any,
+    record: tag as any,
     fn: <In extends HKT, Out extends HKT>(input: TypeTag<In>, output: TypeTag<Out>) =>
         tag<Fn<In, Out>>(),
     merge: <A extends HKT, B extends HKT>(a: TypeTag<A>, b: TypeTag<B>) =>
@@ -897,6 +970,7 @@ const ty: TyDSL = {
     oneOf: <A extends HKT, B extends HKT>(a: TypeTag<A>, b: TypeTag<B>) =>
         tag<OneOf<A, B>>(),
     array: <E extends HKT>(element: TypeTag<E>) => tag<Arr<E>>(),
+    promise: <F extends HKT>(inner: TypeTag<F>) => tag<PromiseHKT<F>>(),
     nullable: <F extends HKT>(inner: TypeTag<F>) => tag<Nullable<F>>(),
     object: <S extends Record<string, TypeTag<any>>>(shape: S) =>
         tag<Obj<{ [K in keyof S & string]: Unwrap<S[K]> }>>(),
@@ -968,12 +1042,16 @@ type EntryScopedTy<Fields extends string, Keys extends string = string> = {
     boolean: TypeTag<Const<boolean>>;
     /** Type descriptor slot. */
     desc: TypeTag<Const<TypeTag<any>>>;
+    /** Self reference. */
+    self: () => TypeTag<Self>;
     /** Nested object with a typed shape. */
     object: <Sh extends Record<string, TypeTag<any>>>(
         shape: Sh,
     ) => TypeTag<Obj<{ [P in keyof Sh & string]: Unwrap<Sh[P]> }>>;
     /** Array type. */
     array: <E extends HKT>(element: TypeTag<E>) => TypeTag<Arr<E>>;
+    /** Promise wrapper. */
+    promise: <F extends HKT>(inner: TypeTag<F>) => TypeTag<PromiseHKT<F>>;
     /** Nullable: `T | null`. */
     nullable: <NF extends HKT>(inner: TypeTag<NF>) => TypeTag<Nullable<NF>>;
     /** Intersection: `A & B`. */
@@ -1002,6 +1080,8 @@ interface ScopedTy<Keys extends string, S extends Record<string, HKT> = Record<s
     boolean: TypeTag<Const<boolean>>;
     /** Type descriptor slot. */
     desc: TypeTag<Const<TypeTag<any>>>;
+    /** Schema-level self reference. */
+    self: () => RefTag<"self", S, []>;
     /** Explicit TypeScript type. */
     type: <T>() => TypeTag<Const<T>>;
 
@@ -1009,37 +1089,25 @@ interface ScopedTy<Keys extends string, S extends Record<string, HKT> = Record<s
      * Reference another field's value. Autocomplete shows only previously defined fields.
      * @param key - Field name to reference (constrained to `Keys`).
      */
-    ref: <K extends Keys>(key: K) => TypeTag<Pluck<K>>;
+    ref: <K extends Keys>(key: K) => RefTag<K, S, []>;
 
     /**
-     * Source reference for dict keys and value access.
-     * Each path segment provides autocomplete based on the source field's structure.
-     *
-     * @example
-     * $.from("tasks")                          // keys from tasks
-     * $.from("tasks", "name")                  // keys from task.name values
-     * $.from("tasks", "input", "fromUser")     // deep path with autocomplete
+     * Map over a dictionary or array source.
      */
-    from: {
-        <K extends Keys>(ref: K): KeySource<K, []>;
-        <K extends Keys,
-            F1 extends FieldAt<S, K, []>
-        >(ref: K, f1: F1): KeySource<K, [F1]>;
-        <K extends Keys,
-            F1 extends FieldAt<S, K, []>,
-            F2 extends FieldAt<S, K, [F1]>
-        >(ref: K, f1: F1, f2: F2): KeySource<K, [F1, F2]>;
-        <K extends Keys,
-            F1 extends FieldAt<S, K, []>,
-            F2 extends FieldAt<S, K, [F1]>,
-            F3 extends FieldAt<S, K, [F1, F2]>
-        >(ref: K, f1: F1, f2: F2, f3: F3): KeySource<K, [F1, F2, F3]>;
-        <K extends Keys,
-            F1 extends FieldAt<S, K, []>,
-            F2 extends FieldAt<S, K, [F1]>,
-            F3 extends FieldAt<S, K, [F1, F2]>,
-            F4 extends FieldAt<S, K, [F1, F2, F3]>
-        >(ref: K, f1: F1, f2: F2, f3: F3, f4: F4): KeySource<K, [F1, F2, F3, F4]>;
+    map: <K extends Keys, Pa extends string[], P extends HKT>(
+        source: RefTag<K, S, Pa>,
+        proj: (entry: EntryRefTag<S, K, Pa, []>) => TypeTag<P>
+    ) => TypeTag<DictMap<K, P, Pa>>;
+
+    keysOf: <T extends HKT>(tag: TypeTag<T>) => TypeTag<KeysOfTag<T>>;
+
+    valuesOf: <T extends HKT>(tag: TypeTag<T>) => TypeTag<ValuesOfTag<T>>;
+
+    access: <T extends HKT, K extends HKT>(tag: TypeTag<T>, key: TypeTag<K>) => TypeTag<AccessTag<T, K>>;
+
+    record: {
+        <V extends HKT>(valueShape: TypeTag<V>): TypeTag<DynRecord<V>>;
+        <K extends HKT, V extends HKT>(keys: TypeTag<K>, valueShape: TypeTag<V>): TypeTag<RecordFromKeys<K, V>>;
     };
     /** Function type: `(input: In) => Out`. */
     fn: <In extends HKT, Out extends HKT>(input: TypeTag<In>, output: TypeTag<Out>) => TypeTag<Fn<In, Out>>;
@@ -1047,14 +1115,8 @@ interface ScopedTy<Keys extends string, S extends Record<string, HKT> = Record<s
     /**
      * Dictionary type. Overloads:
      * - `dict(valueType)` — free keys
-     * - `dict(from("ref"), valueType)` — constrained keys
-     * - `dict(from("ref"), $$ => ...)` — per-key projection
      */
-    dict: {
-        <V extends HKT>(valueShape: TypeTag<V>): TypeTag<DynRecord<V>>;
-        <K extends Keys, Pa extends string[], V extends HKT>(source: KeySource<K, Pa>, valueShape: TypeTag<V>): TypeTag<DictFrom<K, V, Pa>>;
-        <K extends Keys, Pa extends string[], P extends HKT>(source: KeySource<K, Pa>, proj: ($$: EntryScopedTy<EntryFields<S, K, Pa>, Keys>) => TypeTag<P>): TypeTag<DictMap<K, P, Pa>>;
-    };
+    dict: <V extends HKT>(valueShape: TypeTag<V>) => TypeTag<DynRecord<V>>;
 
     /** Intersection: `A & B`. */
     merge: <A extends HKT, B extends HKT>(
@@ -1068,6 +1130,8 @@ interface ScopedTy<Keys extends string, S extends Record<string, HKT> = Record<s
     ) => TypeTag<OneOf<A, B>>;
     /** Array type. */
     array: <E extends HKT>(element: TypeTag<E>) => TypeTag<Arr<E>>;
+    /** Promise wrapper. */
+    promise: <F extends HKT>(inner: TypeTag<F>) => TypeTag<PromiseHKT<F>>;
     /** Nullable: `T | null`. */
     nullable: <NF extends HKT>(inner: TypeTag<NF>) => TypeTag<Nullable<NF>>;
     /** Nested object with a typed shape. */
@@ -1186,8 +1250,8 @@ function schema(): SchemaDef {
 //  7. Proxy factories (immutable, callback-aware)
 // ============================================================
 
-function resolve(v: unknown): unknown {
-    return typeof v === "function" ? (v as Function)(createInnerBuilder()) : v;
+function resolve(v: unknown, data: Record<string, unknown>): unknown {
+    return typeof v === "function" ? (v as Function)(createInnerBuilder(data), data) : v;
 }
 
 function createInnerBuilder(
@@ -1202,15 +1266,15 @@ function createInnerBuilder(
                 if (prop.startsWith("define") && prop.length > 6) {
                     const key = prop.charAt(6).toLowerCase() + prop.slice(7);
                     return (v: unknown) =>
-                        createInnerBuilder({ ...data, [key]: resolve(v) }, items);
+                        createInnerBuilder({ ...data, [key]: resolve(v, data) }, items);
                 }
                 if (prop === "add") {
                     return (v: unknown) =>
-                        createInnerBuilder(data, [...items, resolve(v)]);
+                        createInnerBuilder(data, [...items, resolve(v, data)]);
                 }
                 if (prop === "entry") {
                     return (key: string, v: unknown) =>
-                        createInnerBuilder({ ...data, [key]: resolve(v) }, items);
+                        createInnerBuilder({ ...data, [key]: resolve(v, data) }, items);
                 }
                 if (prop === "build") return () => ({ ...data });
                 if (prop === "done")
@@ -1230,7 +1294,7 @@ function createProxy(data: Record<string, unknown> = {}): unknown {
                 if (prop === "build") return () => ({ ...data });
                 if (prop.startsWith("define") && prop.length > 6) {
                     const key = prop.charAt(6).toLowerCase() + prop.slice(7);
-                    return (v: unknown) => createProxy({ ...data, [key]: resolve(v) });
+                    return (v: unknown) => createProxy({ ...data, [key]: resolve(v, data) });
                 }
                 return undefined;
             },

@@ -6,9 +6,9 @@
  *
  * Key concepts:
  *   - $.ref("field")  — value must match the referenced field
- *   - $.from("field") — use field value as dictionary key
+ *   - $.keysOf(tag)   — extract keys from a field
  *   - $.merge(A, B)   — intersection of two types
- *   - $.dict(from, valueType) — dictionary with constrained keys
+ *   - $.record(keys, valueType) — dictionary with constrained keys
  */
 import { schema, ty } from "../src";
 
@@ -35,13 +35,13 @@ const ProductCard = schema()
 
     // localizedTitle: a record { [locale]: string }
     // e.g. locale = "en" → { en: "Red Sneakers" }
-    .field("localizedTitle", $ => $.dict($.from("locale"), $.string))
+    .field("localizedTitle", $ => $.record($.keysOf($.ref("locale")), $.string))
 
     // priceLabel: { formatted: string } & { [currency]: string }
     // e.g. currency = "usd" → { formatted: "$99.99", usd: "99.99" }
     .field("priceLabel", $ => $.merge(
         $.type<{ formatted: string }>(),
-        $.dict($.from("currency"), $.string),
+        $.record($.keysOf($.ref("currency")), $.string),
     ))
 
     // mirror: exact copy of priceLabel's resolved type
@@ -83,7 +83,7 @@ const SettingsOverride = schema()
         notifications: ty.boolean,
     }))
     // overrides: nullable version of each default key
-    .field("overrides", $ => $.dict($.from("defaults"), $.nullable($.string)))
+    .field("overrides", $ => $.map($.ref("defaults"), () => $.nullable($.string)))
     .done();
 
 const userPrefs = SettingsOverride

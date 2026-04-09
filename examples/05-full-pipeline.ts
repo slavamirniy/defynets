@@ -23,35 +23,38 @@ const ImagePipeline = schema()
     // ── Level 1: Task types ─────────────────────────────────
     // Each task type declares its input and output shape.
     // ty.desc = type descriptor slot (consumer provides ty.object({...}))
-    .field("taskTypes", ty.dict(ty.object({
+    .field("taskTypes", ty.record(ty.object({
         input: ty.desc,
         output: ty.desc,
     })))
 
     // ── Level 2: Infrastructure ─────────────────────────────
     // Workers: each handles a subset of task types
-    .field("workers", $ => $.dict($.object({
-        handles: $.array($.from("taskTypes")),
+    .field("workers", $ => $.record($.object({
+        handles: $.array($.keysOf($.ref("taskTypes"))),
         concurrency: $.type<number>(),
     })))
 
     // Storages: each can store outputs of certain task types
-    .field("storages", $ => $.dict($.object({
-        stores: $.array($.from("taskTypes")),
+    .field("storages", $ => $.record($.object({
+        stores: $.array($.keysOf($.ref("taskTypes"))),
         backend: $.type<"s3" | "local" | "redis">(),
     })))
 
     // Handlers: per-task-type typed function (input → output)
-    .field("handlers", $ => $.dict($.from("taskTypes"), $$ =>
-        $$.fn($$("input"), $$("output")),
+    .field("handlers", $ => $.map($.ref("taskTypes"), task =>
+        $.fn(
+            $.access(task, ty.type<"input">()), 
+            $.access(task, ty.type<"output">())
+        )
     ))
 
     // ── Level 3: Pipeline ───────────────────────────────────
     // Orchestration: each step references a task, worker, storage
     .field("pipeline", $ => $.array($.object({
-        task: $.from("taskTypes"),
-        worker: $.from("workers"),
-        storage: $.from("storages"),
+        task: $.keysOf($.ref("taskTypes")),
+        worker: $.keysOf($.ref("workers")),
+        storage: $.keysOf($.ref("storages")),
     })))
 
     .done();
