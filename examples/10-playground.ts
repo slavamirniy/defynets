@@ -1,8 +1,8 @@
 /**
  * Example 10 — Playground
  *
- * Progressive examples that build on each other, from $.ref to $.map
- * to $.access to $.self — each adding one new concept.
+ * Progressive examples that build on each other, from $.ref to ty.map
+ * to ty.access to ty.self — each adding one new concept.
  *
  * Read top to bottom. Each section has "▸ Try this" suggestions —
  * uncomment or modify and watch TypeScript react in real time.
@@ -32,53 +32,44 @@ console.log("1.", hello);
 // ▸ Try this: remove .defineName() — defineGreeting disappears, build() shows BuildNotReady.
 // ▸ Try this: pass a number to defineGreeting — TS error, must be string (same as name).
 
-
 // ============================================================
-//  2. $.ref + $.keysOf — constrained dictionary keys
+//  2. ty.record + ty.keysOf — constrained dictionary keys
 // ============================================================
 //
-//  $.keysOf extracts keys from a ref:
-//    string → the string itself
-//    array  → element values
-//    object → keyof
-//
-//  The result constrains which keys a record can have.
+//  ty.keysOf($.ref("X")) extracts keys from field X.
+//  ty.record(keys, valueType) creates a dictionary constrained to those keys.
 
 const Permissions = schema()
     .field("roles", ty.array(ty.string))
-    .field("access", $ => $.record($.keysOf($.ref("roles")), ty.boolean))
+    .field("access", $ => ty.record(ty.keysOf($.ref("roles")), ty.boolean))
     .done();
 
 const perms = Permissions
     .defineRoles(["admin", "editor", "viewer"])
-    // ↓ access keys must be exactly "admin" | "editor" | "viewer"
+    // ↓ defineAccess appeared — keys must be exactly "admin" | "editor" | "viewer"
     .defineAccess({ admin: true, editor: true, viewer: false })
     .build();
 
 console.log("2.", perms);
 
-// ▸ Try this: add "hacker: true" to defineAccess — TS error, not a valid role.
-// ▸ Try this: remove "viewer" from defineAccess — TS error, key "viewer" is missing.
-// ▸ Try this: change defineRoles to ["read", "write"] — defineAccess now expects those keys.
-
+// ▸ Try this: add "guest" to defineRoles array — TS will demand it in defineAccess.
+// ▸ Try this: add a typo key like "adm1n" in defineAccess — TS error.
 
 // ============================================================
-//  3. $.map — per-key projection (the power move)
+//  3. ty.map — per-key projection
 // ============================================================
 //
-//  $.map iterates over a dict/array source. For each entry,
-//  you get access to that entry's fields — so each key can
-//  have a DIFFERENT type.
-//
-//  This replaces: { [K in keyof T]: (input: T[K]["in"]) => T[K]["out"] }
+//  ty.map(source, e => ...) iterates over source keys.
+//  'e' exposes the fields of the current entry (e.g., e.request).
+//  Each key gets its own unique type based on its entry data.
 
 const Api = schema()
     .field("endpoints", ty.record(ty.object({
         request:  ty.desc,
         response: ty.desc,
     })))
-    .field("handlers", $ => $.map($.ref("endpoints"), e =>
-        $.fn(e.request, e.response),
+    .field("handlers", $ => ty.map($.ref("endpoints"), e => 
+        ty.fn(e.request, e.response)
     ))
     .done();
 
@@ -87,42 +78,36 @@ const api = Api
         getUser:  { request: ty.type<{ id: number }>(),    response: ty.type<{ name: string }>() },
         search:   { request: ty.type<{ query: string }>(), response: ty.type<{ results: string[] }>() },
     })
+    // ↓ Each handler is fully typed based on its endpoint definition
     .defineHandlers({
-        getUser: (req) => ({ name: `User #${req.id}` }),
-        //        ^^^ req: { id: number } — from getUser.request
-        search:  (req) => ({ results: [req.query] }),
-        //        ^^^ req: { query: string } — from search.request
+        getUser: (req) => ({ name: `User ${req.id}` }),
+        search:  (req) => ({ results: [`Result for ${req.query}`] }),
     })
     .build();
 
-console.log("3.", api.handlers.getUser({ id: 42 }));
+console.log("3.", Object.keys(api.handlers));
 
-// ▸ Try this: return { name: 123 } in getUser — TS error, must be string.
-// ▸ Try this: add a third endpoint "deleteUser" — defineHandlers immediately requires it.
-// ▸ Try this: change getUser.response to ty.type<{ id: number; name: string }>() —
-//   the handler return type updates automatically.
-
+// ▸ Try this: hover over 'req' in getUser — it's { id: number }.
+// ▸ Try this: return a number from getUser — TS error, must be { name: string }.
 
 // ============================================================
-//  4. $.map + $.access — type catalog (type-level join)
+//  4. ty.access — type catalog lookup
 // ============================================================
 //
-//  When types are in a registry and fields reference them by name,
-//  $.access resolves the name to the actual type.
-//
-//  Think of it as: types["user"] → { id: number, name: string }
+//  ty.access(registry, key) looks up a type in a registry by key.
+//  This allows defining types once and referencing them by name.
 
 const TypedApi = schema()
     .field("types", ty.record(ty.desc))
-    .field("methods", $ => $.record($.object({
-        input:  $.keysOf($.ref("types")),
-        output: $.keysOf($.ref("types")),
+    .field("methods", $ => ty.record(ty.object({
+        input:  ty.keysOf($.ref("types")),
+        output: ty.keysOf($.ref("types")),
     })))
-    .field("handlers", $ => $.map($.ref("methods"), m =>
-        $.fn(
-            $.access($.ref("types"), m.input),
-            $.access($.ref("types"), m.output),
-        ),
+    .field("handlers", $ => ty.map($.ref("methods"), m =>
+        ty.fn(
+            ty.access($.ref("types"), m.input),
+            ty.access($.ref("types"), m.output)
+        )
     ))
     .done();
 
@@ -133,151 +118,111 @@ const typed = TypedApi
         status:  ty.type<boolean>(),
     })
     .defineMethods({
-        getUser:    { input: "user",   output: "user" },
-        createPost: { input: "post",   output: "status" },
+        getUser:    { input: "user", output: "user" },
+        createPost: { input: "post", output: "status" },
     })
     .defineHandlers({
+        // u is { id: number, name: string }
         getUser:    (u) => ({ id: u.id, name: u.name.toUpperCase() }),
-        //           ^^ { id: number, name: string } — resolved from "user"
+        // p is { title: string, body: string }
         createPost: (p) => p.title.length > 0,
-        //           ^^ { title: string, body: string } — resolved from "post"
-        //           returns boolean — resolved from "status"
     })
     .build();
 
-console.log("4.", typed.handlers.getUser({ id: 1, name: "alice" }));
+console.log("4.", Object.keys(typed.handlers));
 
-// ▸ Try this: change getUser input to "post" — handler now receives { title, body }.
-// ▸ Try this: add a new type "comment" and a method that uses it.
-// ▸ Try this: set input to "nonexistent" — TS error, not a valid type name.
-
+// ▸ Try this: change getUser output to "status" in defineMethods — TS will demand a boolean return in defineHandlers.
+// ▸ Try this: add a method with input: "nonexistent" — TS error, not a valid type name.
 
 // ============================================================
-//  5. $.self — recursive schema
+//  5. ty.self() — recursive objects
 // ============================================================
 //
-//  $.self() references the entire schema output.
-//  The builder for children is the same as the builder for the root —
-//  you can nest infinitely.
+//  ty.self() inside ty.object() refers to the object being defined.
+//  Allows deep recursive structures like trees.
 
 const Tree = schema()
-    .field("label", ty.string)
-    .field("children", $ => $.array($.self()))
+    .field("node", ty.object({
+        label: ty.string,
+        children: ty.array(ty.self())
+    }))
     .done();
 
 const tree = Tree
-    .defineLabel("root")
-    .defineChildren(b => b
-        .add(b => b
-            .defineLabel("chapter-1")
-            .defineChildren(b => b
-                .add(b => b.defineLabel("section-1.1").defineChildren([]).build())
-                .add(b => b.defineLabel("section-1.2").defineChildren([]).build())
-                .done()
-            )
-            .build()
-        )
-        .add(b => b.defineLabel("chapter-2").defineChildren([]).build())
-        .done()
-    )
+    .defineNode({
+        label: "root",
+        children: [
+            { label: "child-1", children: [] },
+            { label: "child-2", children: [
+                { label: "grandchild", children: [] }
+            ] }
+        ]
+    })
     .build();
 
-console.log("5.", JSON.stringify(tree, null, 2));
+console.log("5.", tree.node.label, "has", tree.node.children.length, "children");
 
-// ▸ Try this: add a third level under section-1.1 — same builder, same types, infinite depth.
-// ▸ Try this: pass a raw object instead of inner builder:
-//   .defineChildren([{ label: "ch1", children: [{ label: "s1", children: [] }] }])
-// ▸ Try this: use ty.self() inside ty.object for object-level recursion instead:
-//   schema().field("root", ty.object({ name: ty.string, items: ty.array(ty.self()) })).done()
-
+// ▸ Try this: add a typo like 'ch1ldren' to grandchild — TS error, excess property check works at any depth.
 
 // ============================================================
-//  6. Combine everything — dependency tree in action
+//  6. Combined Example — RPC + Recursive Workflows
 // ============================================================
-//
-//  A schema with 4 dependency levels. The builder reveals methods
-//  one level at a time. Watch the autocomplete progression.
-//
-//  Level 0:  types          (no deps)
-//  Level 1:  methods        (← types)
-//  Level 2:  handlers       (← methods, types)
-//  Level 3:  routes         (← methods)
-//
-//  You cannot skip levels. TypeScript enforces the order.
 
 const RoutedRPC = schema()
     .field("types",      ty.record(ty.desc))
-    .field("methods",    $ => $.record($.object({
-        input:  $.keysOf($.ref("types")),
-        output: $.keysOf($.ref("types")),
-        auth:   $.type<boolean>(),
+    .field("methods",    $ => ty.record(ty.object({
+        input:  ty.keysOf($.ref("types")),
+        output: ty.keysOf($.ref("types")),
     })))
-    .field("handlers",   $ => $.map($.ref("methods"), method =>
-        $.fn(
-            $.access($.ref("types"), method.input),
-            $.promise($.access($.ref("types"), method.output)),
-        ),
+    .field("handlers",   $ => ty.map($.ref("methods"), m =>
+        ty.fn(ty.access($.ref("types"), m.input), ty.access($.ref("types"), m.output))
     ))
-    .field("routes",     $ => $.array($.keysOf($.ref("methods"))))
+    .field("routes",     $ => ty.array(ty.keysOf($.ref("methods"))))
     .done();
 
-const app = RoutedRPC
-    // ┌ Available: defineTypes
-    // │ Hidden:    defineMethods, defineHandlers, defineRoutes
+const rpcApp = RoutedRPC
     .defineTypes(b => b
         .entry("User", ty.object({ id: ty.number, name: ty.string }))
         .entry("Post", ty.object({ title: ty.string, authorId: ty.number }))
         .done()
     )
-    // ┌ Available: defineMethods  ← unlocked!
-    // │ Hidden:    defineHandlers, defineRoutes
     .defineMethods(b => b
-        .entry("getUser",    { input: "User", output: "User",  auth: false })
-        .entry("createPost", { input: "Post", output: "Post",  auth: true })
+        .entry("getUser",    { input: "User", output: "User" })
+        .entry("createPost", { input: "Post", output: "Post" })
         .done()
     )
-    // ┌ Available: defineHandlers, defineRoutes  ← both unlocked!
     .defineHandlers({
-        getUser:    async (u) => ({ id: u.id, name: u.name }),
-        createPost: async (p) => ({ title: p.title, authorId: p.authorId }),
+        getUser:    (u) => u,
+        createPost: (p) => p,
     })
     .defineRoutes(["getUser", "createPost"])
-    // All defined → build()
     .build();
 
 console.log("6.", {
-    types: Object.keys(app.types),
-    methods: Object.keys(app.methods),
-    routes: app.routes,
+    types: Object.keys(rpcApp.types),
+    methods: Object.keys(rpcApp.methods),
+    routes: rpcApp.routes,
 });
 
-// ▸ Try this: call .defineHandlers before .defineTypes — it doesn't exist.
-// ▸ Try this: hover over build before all fields are defined — BuildNotReady<"handlers" | "routes">.
-// ▸ Try this: add "deleteUser" to defineMethods — defineHandlers immediately requires it.
-// ▸ Try this: set route to ["nonexistent"] — TS error, must be "getUser" | "createPost".
-
-
 // ============================================================
-//  7. Recursive + map + access — the full combo
+//  7. Recursive + map + access — Complex Component System
 // ============================================================
-//
-//  A component system where:
-//  - propTypes = type catalog
-//  - components reference propTypes by name + have recursive children (ty.self)
-//  - renderers are typed per-component via $.map + $.access
-//
-//  This is ref + keysOf + map + access + ty.self + inner builders
-//  all working together.
 
 const UI = schema()
     .field("propTypes", ty.record(ty.desc))
-    .field("components", $ => $.record(ty.object({
-        tag: ty.string,
-        propsType: $.keysOf($.ref("propTypes")),
-        children: ty.array(ty.self()),
+    .field("components", $ => ty.record(ty.object({
+        props: ty.keysOf($.ref("propTypes")),
     })))
-    .field("renderers", $ => $.map($.ref("components"), comp =>
-        $.fn($.access($.ref("propTypes"), comp.propsType), ty.string),
+    .field("renderers", $ => ty.map($.ref("components"), c =>
+        ty.fn(
+            // props object
+            ty.access($.ref("propTypes"), c.props),
+            // returns a virtual DOM node (recursive)
+            ty.object({
+                type: ty.string,
+                children: ty.array(ty.self())
+            })
+        )
     ))
     .done();
 
@@ -286,36 +231,20 @@ const ui = UI
         BoxProps:  ty.object({ direction: ty.type<"row" | "column">(), gap: ty.number }),
         TextProps: ty.object({ content: ty.string, size: ty.number }),
     })
-    .defineComponents(b => b
-        .entry("header", {
-            tag: "header",
-            propsType: "BoxProps",
-            children: [
-                { tag: "h1", propsType: "TextProps", children: [] },
-            ],
-        })
-        .entry("card", {
-            tag: "div",
-            propsType: "BoxProps",
-            children: [
-                { tag: "span", propsType: "TextProps", children: [] },
-            ],
-        })
-        .done()
-    )
+    .defineComponents({
+        Box:  { props: "BoxProps" },
+        Text: { props: "TextProps" },
+    })
     .defineRenderers({
-        header: (p) => `<header dir="${p.direction}" gap=${p.gap}>`,
-        //       ^^^ { direction: "row" | "column", gap: number } — from "BoxProps"
-        card:   (p) => `<div dir="${p.direction}">`,
-        //       ^^^ same — card also uses "BoxProps"
+        Box: (props) => ({
+            type: "div",
+            children: [] // recursive children allowed here
+        }),
+        Text: (props) => ({
+            type: "span",
+            children: []
+        }),
     })
     .build();
 
-console.log("7.", ui.renderers.header({ direction: "row", gap: 8 }));
-
-// ▸ Try this: change card's propsType to "TextProps" — renderer now receives { content, size }.
-// ▸ Try this: add a "ButtonProps" type and a "footer" component using it.
-// ▸ Try this: nest children deeper — ty.self() allows infinite recursion.
-// ▸ Try this: use inner builder for children:
-//   .entry("header", b => b.defineTag("header").definePropsType("BoxProps")
-//     .defineChildren(b => b.add({tag:"h1", propsType:"TextProps", children:[]}).done()).build())
+console.log("7.", Object.keys(ui.renderers));
