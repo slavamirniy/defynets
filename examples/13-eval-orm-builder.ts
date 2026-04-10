@@ -205,3 +205,123 @@ console.log("CMS:", {
     repos: Object.keys(myCMS.repositories),
     renderers: Object.keys(myCMS.renderers),
 });
+
+// --- Advanced Type-Inferencing DeclarativeORM Example ---
+// This demonstrates how to build a type-safe ORM-like schema using inferable schema building blocks.
+// The types of repositories and methods are inferred fully from the catalog definitions and connect properly end-to-end.
+
+// Define the "DeclarativeORM" builder with rich static inference for all table schemas and repositories
+const DeclarativeORM = schema()
+    .field("TypeCatalog", ty.record(ty.desc))
+    .field("TableSchemas", $ => ty.record(ty.keysOf($.ref('TypeCatalog'))))
+    .field("TableMethods", $ => ty.map($.ref('TableSchemas'), $$ => ty.record(ty.object({
+        in: ty.keysOf($.ref('TypeCatalog')),
+        out: ty.keysOf($.ref('TypeCatalog')),
+    }))))
+    .field("Repositories", $ => ty.map($.ref('TableMethods'), methods =>
+        ty.map(methods, method =>
+            ty.fn(
+                ty.access($.ref('TypeCatalog'), method.in),
+                ty.promise(ty.access($.ref('TypeCatalog'), method.out))
+            )
+        )
+    ))
+    .done();
+
+// Instantiate your ORM schema, all types below are fully inferred and will produce helpful TypeScript errors if the structure is violated.
+const mySystem = DeclarativeORM
+    .defineTypeCatalog({
+        User: ty.object({
+            id: ty.string,
+            name: ty.string,
+            email: ty.string,
+        }),
+        Post: ty.object({
+            id: ty.string,
+            title: ty.string,
+            content: ty.string,
+        }),
+        Id: ty.string,
+    })
+    .defineTableSchemas({
+        User: 'User',
+        Post: 'Post'
+    })
+    .defineTableMethods({
+        Post: {
+            getPostById: {
+                in: 'Id',
+                out: 'Post'
+            },
+            createPost: {
+                in: 'Post',
+                out: 'Post'
+            }
+        },
+        User: {
+            getUserById: {
+                in: 'Id',
+                out: 'User'
+            },
+            createUser: {
+                in: 'User',
+                out: 'User'
+            }
+        }
+    })
+    .defineRepositories({
+        Post: {
+            // input/output types are inferred from "TableMethods" declaration above!
+            async getPostById(id) {
+                // id: string
+                return { id, title: "Hello", content: "World" }; // returns Post
+            },
+            async createPost(post) {
+                // post: { id: string; title: string; content: string }
+                return post;
+            }
+        },
+        User: {
+            async getUserById(id) {
+                return { id, name: "Alice", email: "alice@example.com" };
+            },
+            async createUser(user) {
+                return user;
+            }
+        }
+    })
+    .build();
+
+// All type relationships remain preserved
+// For example, the following call is fully type-checked:
+mySystem.Repositories.Post.createPost({
+    id: '123',
+    content: 'hello',
+    title: 'world'
+}); // Will fail at compile-time if you miss a field or use the wrong type!
+
+/*
+    ## Doc Example
+
+    This pattern lets you define catalogs, schemas, and method definitions using the builder,
+    and TypeScript will infer the precise input and output types for all repository methods.
+
+    - Each repository is mapped to the corresponding methods pulled from your "TableMethods" shape.
+    - Each method infers its arguments and return types from your schema/catatalog.
+    - Compile-time errors if your repository implementation doesn't match your schema or types.
+
+    This makes downstream usage as ergonomic and robust as possible:
+
+    ```ts
+    const created = await mySystem.Repositories.Post.createPost({
+        id: "abc",
+        title: "Post title",
+        content: "Post contents"
+    });
+
+    // Error on wrong fields:
+    mySystem.Repositories.User.getUserById(123);        // ❌ Argument of type 'number' is not assignable to 'string'
+    ```
+
+    This is one of the most powerful patterns for building type-safe ORMs and API servers in TypeScript.
+*/

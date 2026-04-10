@@ -424,22 +424,33 @@ interface DictMap<Source extends string, Proj extends HKT, Path extends string[]
     readonly _output: this["_ctx"] extends Record<Source, infer Src>
         ? Path extends []
             ? Src extends readonly any[]
-                ? { [P in Extract<keyof Src, `${number}`> & string]: Apply<Proj, this["_ctx"] & { readonly __entry: Src[P & keyof Src] }> }
+                ? { [P in Extract<keyof Src, `${number}`> & string]: Apply<Proj, Omit<this["_ctx"], "__entry"> & { readonly __entry: Src[P & keyof Src] }> }
                 : Src extends Record<string, any>
-                    ? { [P in keyof Src & string]: Apply<Proj, this["_ctx"] & { readonly __entry: Src[P] }> }
+                    ? { [P in keyof Src & string]: Apply<Proj, Omit<this["_ctx"], "__entry"> & { readonly __entry: Src[P] }> }
                     : never
             : Src extends readonly (infer El extends Record<string, any>)[]
                 ? DeepGet<El, Path> extends infer FV extends string
-                    ? { [P in FV]: Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Extract<El, DeepMatch<Path, P>>, InitPath<Path>> }> }
+                    ? { [P in FV]: Apply<Proj, Omit<this["_ctx"], "__entry"> & { readonly __entry: DeepGet<Extract<El, DeepMatch<Path, P>>, InitPath<Path>> }> }
                     : never
                 : Src extends Record<string, any>
                     ? [DeepGet<Src, Path>] extends [never]
                         ? { [K2 in keyof Src & string as DeepGet<Src[K2], Path> extends infer FV extends string ? FV : never]:
-                            Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Src[K2], InitPath<Path>> }> }
+                            Apply<Proj, Omit<this["_ctx"], "__entry"> & { readonly __entry: DeepGet<Src[K2], InitPath<Path>> }> }
                         : DeepGet<Src, Path> extends Record<string, any>
-                            ? { [P in keyof DeepGet<Src, Path> & string]: Apply<Proj, this["_ctx"] & { readonly __entry: DeepGet<Src, Path>[P] }> }
+                            ? { [P in keyof DeepGet<Src, Path> & string]: Apply<Proj, Omit<this["_ctx"], "__entry"> & { readonly __entry: DeepGet<Src, Path>[P] }> }
                             : never
                     : never
+        : never;
+}
+
+export interface MapRecord<Source extends HKT, Proj extends HKT> extends HKT {
+    readonly _deps: Source["_deps"] | Proj["_deps"];
+    readonly _output: Apply<Source, this["_ctx"]> extends infer Src
+        ? Src extends readonly any[]
+            ? { [P in Extract<keyof Src, `${number}`> & string]: Apply<Proj, Omit<this["_ctx"], "__entry"> & { readonly __entry: Src[P & keyof Src] }> }
+            : Src extends Record<string, any>
+                ? { [P in keyof Src & string]: Apply<Proj, Omit<this["_ctx"], "__entry"> & { readonly __entry: Src[P] }> }
+                : never
         : never;
 }
 
@@ -450,6 +461,8 @@ type DictValueHKT<H> =
     H extends DynRecord<infer V extends HKT> ? V
     : H extends Arr<infer E extends HKT> ? E
     : H extends Schema<infer S extends Record<string, HKT>> ? Schema<S>
+    : H extends DictMap<any, infer Proj extends HKT, any> ? Proj
+    : H extends MapRecord<any, infer Proj extends HKT> ? Proj
     : H;
 
 /** @internal Extracts field names from an Obj or Schema shape. */
@@ -507,7 +520,7 @@ export interface DeepPluck<K extends string, Path extends string[], S extends Re
     >;
 }
 
-interface DeepEntry<Path extends string[]> extends HKT {
+export interface DeepEntry<Path extends string[]> extends HKT {
     readonly _deps: never;
     readonly _output: this["_ctx"] extends { readonly __entry: infer E }
         ? DeepGet<E, Path> extends TypeTag<infer H extends HKT> ? Apply<H, this["_ctx"]> : DeepGet<E, Path>
@@ -555,12 +568,12 @@ interface KeysOfTag<T extends HKT> extends HKT {
                 : never;
 }
 
-interface AccessTag<T extends HKT, K extends HKT> extends HKT {
+export interface AccessTag<T extends HKT, K extends HKT> extends HKT {
     readonly _deps: T["_deps"] | K["_deps"];
     readonly _output: Apply<K, this["_ctx"]> extends string
         ? Apply<T, this["_ctx"]> extends infer U
-            ? U extends Record<Apply<K, this["_ctx"]>, infer V>
-                ? V extends TypeTag<infer H extends HKT> ? Apply<H, this["_ctx"]> : V
+            ? Apply<K, this["_ctx"]> extends keyof U
+                ? U[Apply<K, this["_ctx"]>] extends TypeTag<infer H extends HKT> ? Apply<H, this["_ctx"]> : U[Apply<K, this["_ctx"]>]
                 : never
             : never
         : never;
@@ -938,10 +951,20 @@ interface TyDSL {
     /**
      * Map over a dictionary or array source.
      */
-    map: <K extends string, Pa extends string[], P extends HKT, S extends Record<string, HKT>>(
-        source: RefTag<K, S, Pa>,
-        proj: (entry: EntryRefTag<S, K, Pa, []>) => TypeTag<P>
-    ) => TypeTag<DictMap<K, P, Pa>>;
+    map: {
+        <S extends Record<string, HKT>, K extends string, Pa extends string[], Path extends string[], P extends HKT>(
+            source: EntryRefTag<S, K, Pa, Path>,
+            proj: (entry: TypeTag<DeepEntry<[]>> & { [F in EntryFieldAt<S, K, Pa, Path>]: TypeTag<DeepEntry<[F]>> }) => TypeTag<P>
+        ): TypeTag<MapRecord<DeepEntry<Path>, P>>;
+        <K extends string, Pa extends string[], P extends HKT, S extends Record<string, HKT>>(
+            source: RefTag<K, S, Pa>,
+            proj: (entry: EntryRefTag<S, K, Pa, []>) => TypeTag<P>
+        ): TypeTag<DictMap<K, P, Pa>>;
+        <Source extends HKT, P extends HKT, Fields extends string>(
+            source: TypeTag<Source> & { [K in Fields]: any },
+            proj: (entry: TypeTag<DeepEntry<[]>> & { [K in Fields]: TypeTag<DeepEntry<[K]>> }) => TypeTag<P>
+        ): TypeTag<MapRecord<Source, P>>;
+    };
 
     keysOf: <T extends HKT>(tag: TypeTag<T>) => TypeTag<KeysOfTag<T>>;
 
