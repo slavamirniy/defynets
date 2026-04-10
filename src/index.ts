@@ -101,6 +101,31 @@ interface Pluck<K extends string> extends HKT {
 }
 
 /**
+ * Evaluate a type descriptor field.
+ * Looks up field `K` in context, expects a `TypeTag<H>`, and resolves `Apply<H, ctx>`.
+ *
+ * Use with `ty.desc` slots: the builder user provides a concrete `TypeTag`,
+ * and dependent fields get the resolved type automatically.
+ *
+ * @typeParam K - Name of the field holding the type descriptor.
+ *
+ * @example
+ * schema()
+ *   .field("StateType", ty.desc)
+ *   .field("initial", $ => $.eval("StateType"))
+ *   // defineStateType(ty.object({ count: ty.number }))
+ *   // defineInitial({ count: 0 })  ← resolved type
+ */
+interface EvalRef<K extends string> extends HKT {
+    readonly _deps: K;
+    readonly _output: this["_ctx"] extends Record<K, infer Tag>
+        ? Tag extends TypeTag<infer H extends HKT>
+            ? Apply<H, this["_ctx"]>
+            : never
+        : never;
+}
+
+/**
  * Record keyed by a dynamic string value from field `K`.
  * `ctx[K]` must be a string literal — it becomes the record key.
  *
@@ -621,7 +646,10 @@ type SmartBuilder<
         : S[K]["_deps"] extends keyof Ctx
             ? `define${Capitalize<K>}`
             : never]: <const V extends Apply<S[K], Ctx & { __selfSchema: SelfResolve<S, {}> }>>(
-        valueOrFactory: (V & Apply<S[K], Ctx & { __selfSchema: SelfResolve<S, {}> }>) | ((b: BuilderFor<S[K], Ctx & { __selfSchemaBuilder: SmartBuilder<S>; __selfSchema: SelfResolve<S, {}> }>, ctx: Ctx) => V),
+        valueOrFactory:
+            [BuilderFor<S[K], Ctx & { __selfSchemaBuilder: SmartBuilder<S>; __selfSchema: SelfResolve<S, {}> }>] extends [never]
+                ? (V & Apply<S[K], Ctx & { __selfSchema: SelfResolve<S, {}> }>)
+                : (V & Apply<S[K], Ctx & { __selfSchema: SelfResolve<S, {}> }>) | ((b: BuilderFor<S[K], Ctx & { __selfSchemaBuilder: SmartBuilder<S>; __selfSchema: SelfResolve<S, {}> }>, ctx: Ctx) => V),
     ) => SmartBuilder<S, Pretty<Ctx & Record<K, V>>>;
 } & {
     /**
@@ -884,6 +912,19 @@ interface TyDSL {
     ref<K extends string>(key: K): TypeTag<Pluck<K>>;
 
     /**
+     * Evaluate a type descriptor field.
+     * Resolves `TypeTag<H>` stored in field `key` to `Apply<H, ctx>`.
+     *
+     * @param key - Name of the `ty.desc` field to evaluate.
+     *
+     * @example
+     * schema()
+     *   .field("StateType", ty.desc)
+     *   .field("initial", $ => $.eval("StateType"))
+     */
+    eval<K extends string>(key: K): TypeTag<EvalRef<K>>;
+
+    /**
      * Dictionary type.
      * @example
      * // Free keys:
@@ -979,6 +1020,7 @@ const ty: TyDSL = {
     self: () => tag<Self>(),
     type: <T>() => tag<Const<T>>(),
     ref: <K extends string>(key: K) => tag<Pluck<K>>(),
+    eval: <K extends string>(key: K) => tag<EvalRef<K>>(),
     record: tag as any,
     map: tag as any,
     keysOf: tag as any,
@@ -1101,6 +1143,13 @@ interface ScopedTy<Keys extends string, S extends Record<string, HKT> = Record<s
      * @param key - Field name to reference (constrained to `Keys`).
      */
     ref: <K extends Keys>(key: K) => RefTag<K, S, []>;
+
+    /**
+     * Evaluate a type descriptor field.
+     * Resolves a `ty.desc` slot to its concrete type.
+     * @param key - Name of the `ty.desc` field to evaluate (constrained to `Keys`).
+     */
+    eval: <K extends Keys>(key: K) => TypeTag<EvalRef<K>>;
 }
 
 // ── schema() — step-builder with full autocomplete ───────────
@@ -1277,6 +1326,7 @@ export {
     // Building blocks
     type Const,
     type Pluck,
+    type EvalRef,
     type RecordFromKey,
     type Merge,
     type Arr,

@@ -157,6 +157,7 @@ Inner builders are recursive — inside `.add()`, `.entry()`, `.defineX()` callb
 | `ty.merge(a, b)` | `A & B` | `ty.merge(ty.type<{x: 1}>(), ty.type<{y: 2}>())` |
 | `ty.oneOf(a, b)` | `A \| B` | `ty.oneOf(ty.string, ty.number)` |
 | `ty.promise(inner)` | `Promise<T>` | `ty.promise(ty.string)` |
+| `ty.eval(key)` | Evaluate desc slot | `ty.eval("StateType")` — resolves `TypeTag` stored in field to concrete type |
 
 ## $.* API (inside field callbacks)
 
@@ -165,6 +166,7 @@ Inside `.field("name", $ => ...)`:
 | Method | Purpose | Example |
 |--------|---------|---------|
 | `$.ref("field")` | Reference a previously defined field. Returns RefTag supporting deep chaining | `$.ref("core").events.payload` |
+| `$.eval("field")` | Evaluate a `ty.desc` slot — resolves the stored `TypeTag<H>` to `Apply<H, ctx>` | `$.eval("StateType")` — type slot resolution |
 | `$.self()` | Schema-level self-reference (full schema output) | `ty.array($.self())` — recursive schema |
 
 ### Deep path via RefTag chaining
@@ -560,6 +562,81 @@ TypedForm.defineTypeMap({ string: ty.string, number: ty.number, boolean: ty.bool
     .build();
 ```
 
+### 16. Type slots with $.eval — server framework
+
+Define a type descriptor slot (`ty.desc`), then use `$.eval("field")` to resolve it in dependent fields. The "framework author" pattern.
+
+```typescript
+const ServerCore = schema()
+    .field("ContextType", ty.desc)
+    .field("createContext", $ => ty.fn(ty.type<Request>(), $.eval("ContextType")))
+    .field("routes", $ => ty.record(
+        ty.fn($.eval("ContextType"), ty.promise(ty.type<any>())),
+    ))
+    .done();
+
+ServerCore
+    .defineContextType(ty.object({ db: ty.type<DB>(), userId: ty.string }))
+    .defineCreateContext((req) => ({ db: getDB(), userId: req.headers["x-user-id"] ?? "" }))
+    .defineRoutes({
+        getUser: async (ctx) => ctx.db.user.findFirst({ where: { id: ctx.userId } }),
+    })
+    .build();
+```
+
+### 17. Type slots with $.eval — state manager
+
+```typescript
+const StoreBuilder = schema()
+    .field("StateType", ty.desc)
+    .field("initialState", $ => $.eval("StateType"))
+    .field("mutations", $ => ty.record(
+        ty.fn($.eval("StateType"), ty.type<Record<string, any>>()),
+    ))
+    .field("getters", $ => ty.record(
+        ty.fn($.eval("StateType"), ty.type<any>()),
+    ))
+    .done();
+
+StoreBuilder
+    .defineStateType(ty.object({ count: ty.number, user: ty.nullable(ty.string) }))
+    .defineInitialState({ count: 0, user: null })
+    .defineMutations({
+        increment: (state) => ({ count: state.count + 1 }),
+        login:     (state) => ({ user: "Alice" }),
+    })
+    .defineGetters({
+        isLoggedIn: (state) => state.user !== null,
+    })
+    .build();
+```
+
+### 18. Type slots with $.eval + ty.merge — ORM builder
+
+Combine `$.eval` with `ty.map` and `ty.merge` to intersect a base model with per-table fields.
+
+```typescript
+const ORMBuilder = schema()
+    .field("BaseModel", ty.desc)
+    .field("tableSchemas", ty.record(ty.desc))
+    .field("tables", $ => ty.map($.ref("tableSchemas"), $$ =>
+        ty.merge($.eval("BaseModel"), $$),
+    ))
+    .done();
+
+ORMBuilder
+    .defineBaseModel(ty.object({ id: ty.string, createdAt: ty.type<Date>() }))
+    .defineTableSchemas({
+        users: ty.object({ email: ty.string, age: ty.number }),
+        posts: ty.object({ title: ty.string, content: ty.string }),
+    })
+    .defineTables({
+        users: { id: "1", createdAt: new Date(), email: "a@b.com", age: 25 },
+        posts: { id: "2", createdAt: new Date(), title: "Hi", content: "..." },
+    })
+    .build();
+```
+
 ---
 
 ## Key Rules
@@ -574,4 +651,5 @@ TypedForm.defineTypeMap({ string: ty.string, number: ty.number, boolean: ty.bool
 8. `$.self()` for schema recursion (whole schema output). `ty.self()` for object recursion (current `ty.object` shape).
 9. Inner builders: `(b, ctx) => ...` — second parameter `ctx` contains all previously defined fields.
 10. RefTag chaining: `$.ref("nested").deep.path` for deep references into nested structures.
-11. `MakeBuilder<T>()` is available for simple interface-to-builder conversion (no dependencies, no schema needed).
+11. `$.eval("field")` resolves a `ty.desc` slot to its concrete type — use for the "framework author" pattern where consumers provide types.
+12. `MakeBuilder<T>()` is available for simple interface-to-builder conversion (no dependencies, no schema needed).

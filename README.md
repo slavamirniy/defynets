@@ -54,11 +54,12 @@ That's **architecture as code**. The builder enforces dependency order, provides
 
 ## `$` is only for references
 
-Inside a field callback `$ => ...`, the `$` object has exactly two methods:
+Inside a field callback `$ => ...`, the `$` object has exactly three methods:
 
 | Method | What it does |
 |--------|-------------|
 | `$.ref("field")` | Reference another field. Supports deep path chaining: `$.ref("core").events` |
+| `$.eval("field")` | Evaluate a `ty.desc` slot — resolves the stored `TypeTag` to a concrete type |
 | `$.self()` | Schema-level self-reference (entire schema output) |
 
 Everything else — `map`, `keysOf`, `record`, `access`, `merge`, `fn`, `array`, etc. — lives on `ty`. The `$` just connects fields to each other; `ty` describes shapes.
@@ -682,6 +683,104 @@ const ui = UI
 
 ---
 
+### Step 7: Type slots — `$.eval`
+
+Define a **type descriptor slot** with `ty.desc`. Resolve its concrete type elsewhere with `$.eval("field")`. The builder user provides a type — every dependent field resolves automatically. This is the **framework author pattern**: define the shape of a system once, let consumers plug in their types.
+
+**Without defynets:**
+
+```typescript
+function createServer<Ctx>(opts: {
+    createContext: (req: Request) => Ctx,
+    routes: Record<string, (ctx: Ctx) => Promise<any>>,
+}) { ... }
+// One generic, but it grows fast when you add middleware, hooks, etc.
+```
+
+**With defynets:**
+
+```typescript
+const ServerCore = schema()
+    .field("ContextType", ty.desc)
+    .field("createContext", $ => ty.fn(ty.type<Request>(), $.eval("ContextType")))
+    .field("routes", $ => ty.record(
+        ty.fn($.eval("ContextType"), ty.promise(ty.type<any>())),
+    ))
+    .done();
+```
+
+Read it: *"ContextType is a type slot. createContext produces it from a Request. Routes are functions that receive it."*
+
+The builder user fills the slot — everything resolves:
+
+```typescript
+const server = ServerCore
+    .defineContextType(ty.object({
+        db: ty.type<DB>(),
+        userId: ty.string,
+    }))
+    // createContext now expects: (req: Request) => { db: DB, userId: string }
+    .defineCreateContext((req) => ({
+        db: getDB(),
+        userId: req.headers["x-user-id"] ?? "",
+    }))
+    // Each route handler gets ctx: { db: DB, userId: string }
+    .defineRoutes({
+        getUser: async (ctx) => ctx.db.user.findFirst({ where: { id: ctx.userId } }),
+    })
+    .build();
+```
+
+**State manager — same pattern:**
+
+```typescript
+const StoreBuilder = schema()
+    .field("StateType", ty.desc)
+    .field("initialState", $ => $.eval("StateType"))
+    .field("mutations", $ => ty.record(
+        ty.fn($.eval("StateType"), ty.type<Record<string, any>>()),
+    ))
+    .done();
+
+const store = StoreBuilder
+    .defineStateType(ty.object({ count: ty.number, user: ty.nullable(ty.string) }))
+    .defineInitialState({ count: 0, user: null })
+    .defineMutations({
+        increment: (state) => ({ count: state.count + 1 }),
+        login:     (state) => ({ user: "Alice" }),
+    })
+    .build();
+```
+
+**ORM — eval + map + merge:**
+
+```typescript
+const ORMBuilder = schema()
+    .field("BaseModel", ty.desc)
+    .field("tableSchemas", ty.record(ty.desc))
+    .field("tables", $ => ty.map($.ref("tableSchemas"), $$ =>
+        ty.merge($.eval("BaseModel"), $$),
+    ))
+    .done();
+
+const db = ORMBuilder
+    .defineBaseModel(ty.object({ id: ty.string, createdAt: ty.type<Date>() }))
+    .defineTableSchemas({
+        users: ty.object({ email: ty.string, age: ty.number }),
+        posts: ty.object({ title: ty.string, content: ty.string }),
+    })
+    // Each table = BaseModel & specific fields
+    .defineTables({
+        users: { id: "1", createdAt: new Date(), email: "a@b.com", age: 25 },
+        posts: { id: "2", createdAt: new Date(), title: "Hi", content: "..." },
+    })
+    .build();
+```
+
+`$.eval("BaseModel")` resolves the type descriptor to `{ id: string, createdAt: Date }`. `ty.merge` intersects it with each table's own fields. The builder enforces both base and specific fields per table.
+
+---
+
 ## Inner builders
 
 Every `defineX()` accepts a value **or** a callback with a step-builder:
@@ -763,6 +862,7 @@ Methods with unmet deps don't show in autocomplete — no noise.
 | `ty.oneOf(a, b)` | `A \| B` |
 | `ty.promise(inner)` | `Promise<T>` |
 | `ty.self()` | Recursive self-reference (inside `ty.object`) |
+| `ty.eval(key)` | Evaluate a `ty.desc` slot — resolves stored `TypeTag` to concrete type |
 
 ## The `$` ref scope (inside field callbacks)
 
@@ -771,6 +871,7 @@ Methods with unmet deps don't show in autocomplete — no noise.
 | Method | What it does |
 |--------|-------------|
 | `$.ref("field")` | Reference another field. Supports deep path chaining: `$.ref("core").events` |
+| `$.eval("field")` | Evaluate a `ty.desc` slot — resolves the stored `TypeTag` to a concrete type |
 | `$.self()` | Schema-level self-reference (entire schema output) |
 
 ## API
@@ -806,6 +907,9 @@ Progressive — [`examples/`](./examples):
 | 8 | [08-fsm-pipeline-worker.ts](examples/08-fsm-pipeline-worker.ts) | FSM, pipeline, worker queue |
 | 9 | [09-recursion-and-advanced.ts](examples/09-recursion-and-advanced.ts) | `$.self()`, `ty.self()`, graphs, dynamic form builder |
 | 10 | [10-playground.ts](examples/10-playground.ts) | RPC + recursive workflows + component system — all features combined |
+| 11 | [11-eval-server-framework.ts](examples/11-eval-server-framework.ts) | `$.eval` — type slots for server context |
+| 12 | [12-eval-state-manager.ts](examples/12-eval-state-manager.ts) | `$.eval` — state management kernel |
+| 13 | [13-eval-orm-builder.ts](examples/13-eval-orm-builder.ts) | `$.eval` + `ty.merge` — ORM / CMS builder |
 
 ---
 
